@@ -33,7 +33,9 @@ MACROS = [
 class Sandbox:
     def __init__(self, scratch: Path):
         self.scratch = scratch
+        # 記憶體不夠時 DuckDB 會把資料暫存到磁碟；預設是目前資料夾的 .tmp，改放在 workspace 的暫存區
         self.con = duckdb.connect(config={"threads": 2, "memory_limit": "2GB",
+                                          "temp_directory": str(scratch / "duckdb"),
                                           "autoinstall_known_extensions": False,
                                           "autoload_known_extensions": False})
         self.locked = False

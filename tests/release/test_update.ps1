@@ -117,10 +117,17 @@ function Snapshot([string]$folder) {
     } | Out-String
 }
 
-function Put-Zip([string]$version) {
+# 和使用者一樣：從 Release 頁下載 ZIP 與 SHA256SUMS.txt 放進工具資料夾
+function Put-Zip([string]$version, [bool]$withSums = $true) {
     $name = "data-processor-$version.zip"
-    Copy-Item -LiteralPath (Join-Path $info.zips $name) -Destination (Join-Path $dir $name)
-    return (Join-Path $dir $name)
+    $target = Join-Path $dir $name
+    Copy-Item -LiteralPath (Join-Path $info.zips $name) -Destination $target
+    Remove-Item -LiteralPath (Join-Path $dir "SHA256SUMS.txt") -ErrorAction SilentlyContinue
+    if ($withSums) {
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLower()
+        [IO.File]::WriteAllText((Join-Path $dir "SHA256SUMS.txt"), "$hash  $name`n")
+    }
+    return $target
 }
 
 function Start-Step([string]$name) { $script:step = $name; Write-Host ""; Write-Host "== $name" -ForegroundColor Cyan }
@@ -148,6 +155,21 @@ $older = Put-Zip "0.0.1"
 Check ((Run-Bat @("update", "--yes")) -eq 0) "結束代碼 0"
 Check ((Version-Of "app") -eq $info.current) "不會降版"
 Remove-Item -LiteralPath $older
+
+Start-Step "沒有 SHA256SUMS.txt 時不安裝"
+$zip = Put-Zip $info.next $false
+Run-Bat @("update", "--yes") | Out-Null
+Check ((Version-Of "app") -eq $info.current) "還是 $($info.current)"
+Check (-not (Test-Path "$dir\app.old")) "沒有動到 app"
+Remove-Item -LiteralPath $zip
+
+Start-Step "ZIP 被改過（和 SHA256SUMS.txt 對不上）時不安裝"
+$zip = Put-Zip $info.next
+[IO.File]::AppendAllText($zip, "x")          # 模擬下載不完整或被竄改
+Run-Bat @("update", "--yes") | Out-Null
+Check ((Version-Of "app") -eq $info.current) "還是 $($info.current)"
+Check (-not (Test-Path "$dir\app.old")) "沒有動到 app"
+Remove-Item -LiteralPath $zip
 
 Start-Step "更新到 $($info.next)"
 $zip = Put-Zip $info.next

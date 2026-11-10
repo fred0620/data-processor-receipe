@@ -124,7 +124,9 @@ def update_steps() -> None:
     f.rect(x + 24, 160, width - 48, 34, stroke=GREEN, width=1.5)
     f.file(x + 34, 168, GREEN, "ZIP")
     f.text(x + 56, 182, "data-processor-0.2.1.zip", 12, 700, GREEN)
-    f.lines(x + width / 2, 262, ["在公司 GitLab 專案頁", "下載 ZIP，不用解壓"], anchor="middle")
+    f.file(x + 34, 204, GREEN, "TXT")
+    f.text(x + 56, 218, "SHA256SUMS.txt", 12, 700, GREEN)
+    f.lines(x + width / 2, 262, ["下載 ZIP 和 SHA256SUMS.txt", "ZIP 不用解壓"], anchor="middle")
 
     # 2. 工具資料夾
     x = panels[1]
@@ -133,9 +135,10 @@ def update_steps() -> None:
     f.line(x + 12, 92, x + width - 12, 92)
     for row, (kind, name) in enumerate((("folder", "app"), ("folder", "runtime"), ("folder", "workspace"),
                                         ("file", "run.bat"))):
-        f.entry(x + 24, 116 + row * 24, kind, name)
-    f.entry(x + 24, 212, "zip", "data-processor-0.2.1.zip", color=GREEN, weight=700)
-    f.lines(x + width / 2, 262, ["和 run.bat 放在同一層", "其他東西都不用動"], anchor="middle")
+        f.entry(x + 24, 110 + row * 22, kind, name)
+    f.entry(x + 24, 198, "zip", "data-processor-0.2.1.zip", color=GREEN, weight=700)
+    f.entry(x + 24, 220, "file", "SHA256SUMS.txt", color=GREEN, weight=700)
+    f.lines(x + width / 2, 262, ["兩個檔案和 run.bat 放同一層", "其他東西都不用動"], anchor="middle")
 
     # 3. 黑色視窗
     x = panels[2]
@@ -143,7 +146,7 @@ def update_steps() -> None:
     f.line(x + 12, 80, x + width - 12, 80, RULE)
     for dot in range(3):
         f.add(f'<circle cx="{x + 24 + dot * 10}" cy="70" r="3" fill="{RULE}"/>')
-    console = ["找到新版本 0.2.1", "（目前 0.2.0）", "要現在更新嗎？[Y/n]"]
+    console = ["找到新版本 0.2.1", "檔案核對相符", "要現在更新嗎？[Y/n]"]
     for row, value in enumerate(console):
         f.text(x + 22, 104 + row * 20, value, 12, fill=INK, font=MONO)
     f.text(x + 22, 164, "按 Enter", 12, 700, GREEN, font=MONO)

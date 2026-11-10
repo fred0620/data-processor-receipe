@@ -28,9 +28,9 @@
 
 ![更新三步驟](images/update-02-steps.svg)
 
-1. 到公司 GitLab 專案的 **Deploy > Releases**，下載新版的 `data-processor-版本.zip`。**不用解壓。**
-2. 把 ZIP 放進工具資料夾，和 `run.bat` 同一層。
-3. 雙擊 `run.bat`。黑色視窗問「要現在更新嗎？」時按 Enter，接著工具會用新版開啟。
+1. 到公司 GitLab 專案的 **Deploy > Releases**，下載新版的 `data-processor-版本.zip` 和 `SHA256SUMS.txt` 兩個檔案。**不用解壓。**
+2. 把兩個檔案都放進工具資料夾，和 `run.bat` 同一層。
+3. 雙擊 `run.bat`。工具會先用 `SHA256SUMS.txt` 核對 ZIP 是不是正式發布、完整下載的檔案，相符才會問「要現在更新嗎？」，按 Enter，接著工具會用新版開啟。
 
 更新只換掉 `app` 和 `run.bat`，舊版會改名為 `app.old` 留著，`workspace` 完全不動：
 
@@ -62,6 +62,10 @@
 **不要動 `workspace` 和 `runtime`**，也不要把整個新資料夾覆蓋到舊資料夾上，以免舊版的檔案殘留。
 
 ## 6. 常見問題
+
+**黑色視窗說「不會安裝這個版本」**
+「找不到核對資料」：`SHA256SUMS.txt` 沒有一起放進來，回 Release 頁下載後放進工具資料夾。
+「對不上」：ZIP 可能沒下載完整，或不是 Release 頁上的檔案。刪掉後重新下載 ZIP 和 `SHA256SUMS.txt`。不要用別人轉寄或其他地方拿到的 ZIP。
 
 **放了 ZIP，雙擊 `run.bat` 卻沒有問要不要更新**
 檔名要是 `data-processor-版本.zip`，例如 `data-processor-0.2.1.zip`。瀏覽器重複下載時會變成 `data-processor-0.2.1 (1).zip`，改回原本的檔名即可。比目前版本舊或相同的 ZIP 會被略過，黑色視窗會提示可以刪掉。

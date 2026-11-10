@@ -234,6 +234,7 @@ def bye():
 
 RECIPE_LIMIT = 512 * 1024
 MAX_RUNS = 10
+MAX_WORKBOOKS = 10
 _workbooks: dict[str, dict] = {}   # 代號 → 上傳的 workbook
 _runs: dict[str, dict] = {}        # 代號 → 最近一次執行結果
 _run_lock = threading.Lock()
@@ -351,6 +352,10 @@ def _register_workbook(source: Path, name: str) -> dict:
     digest = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
     workbook_id = uuid.uuid4().hex[:12]
     _workbooks[workbook_id] = {"path": source, "name": name, "hash": digest, "sheets": sheets}
+    while len(_workbooks) > MAX_WORKBOOKS:   # 只留最近幾份，舊的上傳檔一併刪除
+        old = _workbooks.pop(next(iter(_workbooks)))
+        if old["path"].parent == paths.UPLOADS:
+            old["path"].unlink(missing_ok=True)
     log.info("載入 workbook id=%s sheets=%d", workbook_id, len(sheets))
     return {"id": workbook_id, "name": name,
             "sheets": [{"name": s.name, "rows": len(s.rows)} for s in sheets]}

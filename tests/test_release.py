@@ -63,3 +63,14 @@ def test_update_and_rollback_on_windows(release, tmp_path):
                           capture_output=True, timeout=600)
     output = (done.stdout + done.stderr).decode("utf-8", "replace")
     assert done.returncode == 0, output
+
+
+def test_offline_package_must_match_uv_lock(tmp_path):
+    name, _ = next(iter(build_release.locked_hashes().items()))
+    (tmp_path / name).write_bytes(b"not the real package")        # 鏡像或 PyPI 上的檔案被換掉
+    with pytest.raises(SystemExit, match="SHA256"):
+        build_release.verify_wheels(tmp_path)
+    (tmp_path / name).unlink()
+    (tmp_path / "evil-1.0-py3-none-any.whl").write_bytes(b"x")     # uv.lock 裡沒有的套件
+    with pytest.raises(SystemExit, match="不在 uv.lock"):
+        build_release.verify_wheels(tmp_path)
