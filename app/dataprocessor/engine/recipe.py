@@ -30,6 +30,31 @@ _Loader.yaml_implicit_resolvers = {
     for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()}
 _Loader.add_implicit_resolver("tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
                               list("tTfF"))
+
+
+def _refuse_extras(loader: _Loader) -> None:
+    """recipe 用不到錨點（&）、別名（*）與 !! 標籤，一律拒絕：
+    別名可以用很小的檔案展開成巨大的資料；標籤是 YAML 被拿來執行程式的入口。"""
+    event = loader.peek_event()
+    line = event.start_mark.line + 1
+    if isinstance(event, yaml.AliasEvent):
+        raise RecipeError([f"第 {line} 行：recipe 不能使用別名（*{event.anchor}），請把內容直接寫出來"])
+    if getattr(event, "anchor", None):
+        raise RecipeError([f"第 {line} 行：recipe 不能使用錨點（&{event.anchor}），請把內容直接寫出來"])
+    tag = getattr(event, "tag", None)
+    if tag and tag != "!":
+        raise RecipeError([f"第 {line} 行：recipe 不能使用標籤（{tag}），請拿掉 ! 開頭的寫法"])
+
+
+_compose_node = _Loader.compose_node
+
+
+def _safe_compose(self, parent, index):
+    _refuse_extras(self)
+    return _compose_node(self, parent, index)
+
+
+_Loader.compose_node = _safe_compose
 WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 TYPES = {"text", "number", "integer", "date"}
 LEVELS = {"review", "notice"}
@@ -57,6 +82,23 @@ class Column:
     formats: list[str] = field(default_factory=list)
     roc: str = "auto"
     map: str | None = None
+    decimal: str = "."                                  # 小數點符號；"," 時 1.000,02 = 1000.02
+    extract: list["Extract"] = field(default_factory=list)  # 從儲存格裡取一部分，多個寫法依序嘗試
+    source: str | None = None                            # 取用另一個欄位的儲存格（同一格拆成多欄）
+
+
+@dataclass
+class Extract:
+    line: int | None = None          # 第幾行（1 起算，負數從最後一行算）
+    after: list[str] = field(default_factory=list)    # 取這些關鍵字之後的文字（任一個符合即可）
+    before: list[str] = field(default_factory=list)   # 取到這些關鍵字之前
+    regex: re.Pattern | None = None  # 正規表達式；有括號時取第一組
+
+
+@dataclass
+class SheetColumn:
+    name: str
+    regex: re.Pattern | None = None
 
 
 @dataclass
@@ -65,6 +107,8 @@ class Input:
     sheet: list[str]
     header_row: int | None
     columns: dict[str, Column]
+    sheets: list[str] = field(default_factory=list)      # 工作表名稱的萬用字元（item_*），符合的全部疊在一起
+    sheet_column: SheetColumn | None = None              # 把工作表名稱（或其中一段）放進一個欄位
 
 
 @dataclass
@@ -325,7 +369,20 @@ def _inputs(check: _Checker, raw: Any, mappings: dict[str, Mapping]) -> dict[str
         where = f"inputs.{table}"
         if check.name(table, where) is None:
             continue
-        spec = check.mapping(spec, where, {"sheet", "header_row", "columns"}, {"columns"})
+        spec = check.mapping(spec, where, {"sheet", "sheets", "sheet_column", "header_row", "columns"}, {"columns"})
+        if spec.get("sheet") and spec.get("sheets"):
+            check.fail(where, "sheet（挑一張）和 sheets（全部疊起來）只能擇一")
+        sheets = check.str_list(spec.get("sheets"), f"{where}.sheets")
+        sheet_column = None
+        if spec.get("sheet_column") is not None:
+            sc = spec["sheet_column"]
+            if isinstance(sc, str):
+                sc = {"name": sc}
+            sc = check.mapping(sc, f"{where}.sheet_column", {"name", "regex"}, {"name"})
+            sc_name = check.name(sc.get("name"), f"{where}.sheet_column.name")
+            pattern = _regex(check, sc.get("regex"), f"{where}.sheet_column.regex") if sc.get("regex") else None
+            if sc_name:
+                sheet_column = SheetColumn(sc_name, pattern)
         header_row = spec.get("header_row")
         if header_row not in (None, "auto") and (not isinstance(header_row, int) or not 1 <= header_row <= 1000):
             check.fail(f"{where}.header_row", "要是 1 到 1000 的列號，或 auto")
@@ -343,10 +400,48 @@ def _inputs(check: _Checker, raw: Any, mappings: dict[str, Mapping]) -> dict[str
             if isinstance(cspec, (str, list)):
                 cspec = {"aliases": cspec}
             cspec = check.mapping(cspec, cwhere, {"aliases", "type", "required", "text", "replace", "strip",
-                                                  "formats", "roc", "map"})
+                                                  "formats", "roc", "map", "decimal", "extract", "source"})
             columns[column] = _column(check, column, cspec, cwhere, mappings)
+        for column in columns.values():
+            if column.source is not None:
+                target = columns.get(column.source)
+                if target is None or target.source is not None:
+                    check.fail(f"{where}.columns.{column.name}.source", f"「{column.source}」要是同一張表、有自己表頭的欄位")
+        if sheet_column and sheet_column.name in columns:
+            check.fail(f"{where}.sheet_column.name", f"「{sheet_column.name}」和欄位名稱重複")
         result[table] = Input(table, check.str_list(spec.get("sheet"), f"{where}.sheet"),
-                              header_row if isinstance(header_row, int) else None, columns)
+                              header_row if isinstance(header_row, int) else None, columns, sheets, sheet_column)
+    return result
+
+
+def _regex(check: _Checker, value: Any, where: str) -> re.Pattern | None:
+    text = check.text(value, where, limit=500)
+    if text is None:
+        return None
+    try:
+        return re.compile(text)
+    except re.error as exc:
+        check.fail(where, f"正規表達式錯誤：{exc}")
+        return None
+
+
+def _extracts(check: _Checker, raw: Any, where: str) -> list[Extract]:
+    """extract 可以是一個寫法，或多個寫法的清單（依序嘗試，第一個取得到值的就用）。"""
+    items = raw if isinstance(raw, list) else [raw]
+    result = []
+    for i, item in enumerate(items):
+        iwhere = f"{where}[{i}]" if isinstance(raw, list) else where
+        item = check.mapping(item, iwhere, {"line", "after", "before", "regex"})
+        if not item:
+            check.fail(iwhere, "至少要有 line、after、before、regex 其中一個")
+            continue
+        line = item.get("line")
+        if line is not None and (not isinstance(line, int) or isinstance(line, bool) or line == 0):
+            check.fail(f"{iwhere}.line", "要是不為 0 的整數（1 是第一行，-1 是最後一行）")
+            line = None
+        pattern = _regex(check, item["regex"], f"{iwhere}.regex") if item.get("regex") is not None else None
+        result.append(Extract(line, check.str_list(item.get("after"), f"{iwhere}.after"),
+                              check.str_list(item.get("before"), f"{iwhere}.before"), pattern))
     return result
 
 
@@ -377,10 +472,21 @@ def _column(check: _Checker, name: str, spec: dict, where: str, mappings: dict[s
         check.fail(f"{where}.map", f"找不到對照表「{map_name}」，要先定義在 mappings")
     if map_name is not None and column_type != "text":
         check.fail(f"{where}.map", "對照表只能用在 text 欄位")
+    decimal = spec.get("decimal", ".")
+    if decimal not in (".", ","):
+        check.fail(f"{where}.decimal", "只能是 \".\"（1,000.02）或 \",\"（1.000,02）")
+    if "decimal" in spec and column_type not in ("number", "integer"):
+        check.fail(f"{where}.decimal", "只能用在 number 或 integer 欄位")
+    source = spec.get("source")
+    if source is not None:
+        source = check.name(source, f"{where}.source")
+        if "aliases" in spec:
+            check.fail(where, "有 source 時不用寫 aliases（直接用來源欄位的儲存格）")
+    extract = _extracts(check, spec["extract"], f"{where}.extract") if spec.get("extract") is not None else []
     aliases = check.str_list(spec.get("aliases"), f"{where}.aliases") or [name]
     return Column(name, aliases, column_type, bool(spec.get("required", False)), ops, replace,
                   check.str_list(spec.get("strip"), f"{where}.strip"),
-                  check.str_list(spec.get("formats"), f"{where}.formats"), roc, map_name)
+                  check.str_list(spec.get("formats"), f"{where}.formats"), roc, map_name, decimal, extract, source)
 
 
 def _gate(check: _Checker, raw: Any, inputs: dict[str, Input]) -> list[Gate]:

@@ -8,6 +8,7 @@ Load → Gate → Normalize → Match → Transform → Validate → Mapping →
 from __future__ import annotations
 
 import datetime as dt
+import fnmatch
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -16,7 +17,7 @@ from pathlib import Path
 from .recipe import MODES, Column, Mapping, Recipe, RecipeError, quote
 from .review import MappingStore, ReviewStore
 from .sandbox import SQL_TYPES, Sandbox
-from .textnorm import clean_text, key, parse_date, parse_integer, parse_number
+from .textnorm import clean_text, extract, halfwidth, key, parse_date, parse_integer, parse_number
 from .workbook import Sheet, cell_text, data_rows, locate
 
 MAX_CANDIDATES = 5     # 左表一列只對一列時，最多列出幾筆候選
@@ -117,7 +118,7 @@ class _Run:
         direct = {c.name: c.expr.strip('"') for c in self.recipe.output.columns if c.expr.startswith('"')}
         plan: dict[str, dict[str, tuple[str, dict]]] = {}
         for rid, changes in self.review.data["edits"].items():
-            table = rid.rpartition(":")[0]
+            table = rid.split(":", 1)[0]
             spec = self.recipe.inputs.get(table)
             for out_name, change in changes.items():
                 source = direct.get(out_name)
@@ -148,52 +149,96 @@ class _Run:
 
     # ---------- Load + Normalize ----------
 
+    def _locate(self, sheets: list[Sheet], spec) -> list | None:
+        """找出這張輸入表要讀哪些工作表與表頭。sheets（萬用字元）時，符合的工作表全部都要讀。"""
+        aliases = {c: col.aliases for c, col in spec.columns.items() if col.source is None}
+        if not spec.sheets:
+            found = locate(sheets, spec.sheet, spec.header_row, aliases)
+            if found is None:
+                where = f"工作表 {'、'.join(spec.sheet)}" if spec.sheet else "所有工作表"
+                self.fatal([f"輸入表 {spec.name}：在{where}裡找不到任何一個欄位的表頭"])
+                return None
+            return [found]
+        matched = [s for s in sheets
+                   if any(fnmatch.fnmatchcase(halfwidth(s.name).casefold(), halfwidth(p).casefold()) for p in spec.sheets)]
+        if not matched:
+            names = "、".join(s.name for s in sheets)
+            self.fatal([f"輸入表 {spec.name}：沒有工作表符合 {'、'.join(spec.sheets)}（這個檔案的工作表：{names}）"])
+            return None
+        result, problems = [], []
+        for sheet in matched:
+            found = locate([sheet], [], spec.header_row, aliases)
+            if found is None:
+                problems.append(f"輸入表 {spec.name}：工作表「{sheet.name}」找不到任何一個欄位的表頭")
+            else:
+                result.append(found)
+        if problems:
+            self.fatal(problems)
+            return None
+        return result
+
     def load(self, sheets: list[Sheet], box: Sandbox) -> list[Issue]:
         pending: list[Issue] = []
         by_name = {s.name: s for s in sheets}
         for spec in self.recipe.inputs.values():
-            found = locate(sheets, spec.sheet, spec.header_row, {c: col.aliases for c, col in spec.columns.items()})
-            if found is None:
-                where = f"工作表 {'、'.join(spec.sheet)}" if spec.sheet else "所有工作表"
-                self.fatal([f"輸入表 {spec.name}：在{where}裡找不到任何一個欄位的表頭"])
+            targets = self._locate(sheets, spec)
+            if targets is None:
                 continue
-            required = [c for c in found.missing if spec.columns[c].required]
-            if required:
-                names = "、".join(f"{c}（{'/'.join(spec.columns[c].aliases)}）" for c in required)
-                self.fatal([f"輸入表 {spec.name}：工作表「{found.sheet}」第 {found.header_row} 列找不到必要欄位 {names}"])
+            problems = []
+            for found in targets:
+                required = [c for c in found.missing if spec.columns[c].required]
+                if required:
+                    names = "、".join(f"{c}（{'/'.join(spec.columns[c].aliases)}）" for c in required)
+                    problems.append(f"輸入表 {spec.name}：工作表「{found.sheet}」第 {found.header_row} 列找不到必要欄位 {names}")
+            if problems:
+                self.fatal(problems)
                 continue
-            for column in found.missing:
-                self.issues.append(Issue("notice", "load", "missing_column",
-                                         f"{spec.name} 找不到欄位 {column}（{'/'.join(spec.columns[column].aliases)}），整欄留空",
-                                         table=spec.name, column=column))
-            self.labels[spec.name] = {c: found.headers.get(c, spec.columns[c].aliases[0]) for c in spec.columns}
+            stacked = bool(spec.sheets)
+            first = targets[0]
+            self.labels[spec.name] = {c: first.headers.get(c, col.aliases[0]) if col.source is None
+                                      else f"{first.headers.get(col.source, col.source)}（{c}）"
+                                      for c, col in spec.columns.items()}
             rows = []
             self.raw[spec.name] = {}
-            for number, raw in data_rows(by_name[found.sheet], found):
-                rid = f"{spec.name}:{number}"
-                self.raw[spec.name][rid] = raw
-                row = {"_rid": rid, "_row": number}
-                for name, column in spec.columns.items():
-                    before = len(pending)
-                    row[name] = self.normalize(spec.name, column, raw.get(name), rid, pending)
-                    if name in self.upstream.get(rid, {}):
-                        out_name, change = self.upstream[rid][name]
-                        now = _display(row[name]) if row[name] is not None else _display(raw.get(name))
-                        del pending[before:]          # 人工修正過的格子，不再提醒解析或對照問題
-                        if now != _display(change.get("original")):
-                            pending.append(Issue("review", "normalize", "edit_stale",
-                                                 f"{out_name} 人工修改後，原始值已變更（原本「{_display(change.get('original'))}」，"
-                                                 f"現在「{now}」）", rid=rid, table=spec.name, column=name))
-                        value = change.get("value")
-                        row[name] = None if value == "" else value
-                        self.applied[(rid, out_name)] = change.get("original")
-                rows.append(row)
-            types = {"_rid": "VARCHAR", "_row": "BIGINT",
+            for found in targets:
+                for column in found.missing:
+                    self.issues.append(Issue("notice", "load", "missing_column",
+                                             f"{spec.name} 在工作表「{found.sheet}」找不到欄位 {column}"
+                                             f"（{'/'.join(spec.columns[column].aliases)}），整欄留空",
+                                             table=spec.name, column=column))
+                for number, raw in data_rows(by_name[found.sheet], found):
+                    for name, column in spec.columns.items():
+                        if column.source is not None:   # 同一格拆成多個欄位
+                            raw[name] = raw.get(column.source)
+                    rid = f"{spec.name}:{found.sheet}:{number}" if stacked else f"{spec.name}:{number}"
+                    self.raw[spec.name][rid] = raw
+                    row = {"_rid": rid, "_row": number, "_sheet": found.sheet}
+                    if spec.sheet_column:
+                        row[spec.sheet_column.name] = _sheet_value(found.sheet, spec.sheet_column)
+                    for name, column in spec.columns.items():
+                        before = len(pending)
+                        row[name] = self.normalize(spec.name, column, raw.get(name), rid, pending)
+                        if name in self.upstream.get(rid, {}):
+                            out_name, change = self.upstream[rid][name]
+                            now = _display(row[name]) if row[name] is not None else _display(raw.get(name))
+                            del pending[before:]          # 人工修正過的格子，不再提醒解析或對照問題
+                            if now != _display(change.get("original")):
+                                pending.append(Issue("review", "normalize", "edit_stale",
+                                                     f"{out_name} 人工修改後，原始值已變更（原本「{_display(change.get('original'))}」，"
+                                                     f"現在「{now}」）", rid=rid, table=spec.name, column=name))
+                            value = change.get("value")
+                            row[name] = None if value == "" else value
+                            self.applied[(rid, out_name)] = change.get("original")
+                    rows.append(row)
+                self.stage("load", f"{spec.name}：工作表「{found.sheet}」第 {found.header_row} 列為表頭，"
+                                   f"{sum(1 for r in rows if r['_sheet'] == found.sheet)} 列")
+            types = {"_rid": "VARCHAR", "_row": "BIGINT", "_sheet": "VARCHAR",
+                     **({spec.sheet_column.name: "VARCHAR"} if spec.sheet_column else {}),
                      **{name: SQL_TYPES[c.type] for name, c in spec.columns.items()}}
             box.load(spec.name, types, rows)
-            self.inputs[spec.name] = {"sheet": found.sheet, "header_row": found.header_row, "rows": len(rows),
-                                      "headers": found.headers, "missing": found.missing, "excluded": 0}
-            self.stage("load", f"{spec.name}：工作表「{found.sheet}」第 {found.header_row} 列為表頭，{len(rows)} 列")
+            self.inputs[spec.name] = {"sheet": "、".join(t.sheet for t in targets), "sheets": [t.sheet for t in targets],
+                                      "header_row": first.header_row, "rows": len(rows),
+                                      "headers": first.headers, "missing": first.missing, "excluded": 0}
         self.summary("load", f"{len(self.inputs)} 張表・{sum(i['rows'] for i in self.inputs.values())} 列")
         return pending
 
@@ -208,12 +253,18 @@ class _Run:
                 flag("review", "required", f"{label} 是必填欄位，但這列是空白")
             return None
         text = str(raw)
+        if column.extract:
+            text = extract(text, column.extract)
+            if text is None:   # 這一格沒有要找的內容；有時候有、有時候沒有是正常的，必填時才標記
+                if column.required:
+                    flag("review", "extract", f"{label} 在儲存格裡找不到要取的內容（原始內容：{_short(raw)}）")
+                return None
         for pattern, repl in column.replace if column.type != "text" else []:
             text = pattern.sub(repl, text)
         if column.type == "number":
-            value = parse_number(text, column.strip)
+            value = parse_number(text, column.strip, column.decimal)
         elif column.type == "integer":
-            value = parse_integer(text, column.strip)
+            value = parse_integer(text, column.strip, column.decimal)
         elif column.type == "date":
             value = parse_date(text, column.formats, column.roc)
         else:
@@ -226,7 +277,8 @@ class _Run:
             return value
         if value is None:
             kind = {"number": "數字", "integer": "整數", "date": "日期"}[column.type]
-            flag("review", "parse", f"{label} 無法解析成{kind}，已留空（原始內容：{raw}）")
+            hint = "；千分位或小數點寫法可能不同，可以在 recipe 設定 decimal" if column.type != "date" and "," in text and "." in text else ""
+            flag("review", "parse", f"{label} 無法解析成{kind}，已留空（原始內容：{_short(text)}）{hint}")
         return value
 
     def _missing_map(self, name: str, value: str, flag) -> str | None:
@@ -531,7 +583,7 @@ class _Run:
         spec = self.recipe.output
         source_columns = box.columns(spec.source)
         rid_columns = [c for c in source_columns if c == "_rid" or c.startswith("_rid_")]
-        extra = rid_columns + (["_row"] if "_row" in source_columns else [])
+        extra = rid_columns + [c for c in ("_row", "_sheet") if c in source_columns]
         select = ", ".join([*(quote(c) for c in extra),
                             *(f"({c.expr}) AS {quote(f'__c{i}')}" for i, c in enumerate(spec.columns))])
         order = f" ORDER BY {spec.order_by}" if spec.order_by else ""
@@ -552,7 +604,8 @@ class _Run:
             rid = own.get("_rid") or f"out:{n + 1}"
             if own.get("_rid") and seen.get(rid, 0) > 1:   # 一對多展開後同一個左表列有多列，加上右表列代號區分
                 rid = "|".join([rid, *(str(own[c]) for c in rid_columns if c != "_rid" and own.get(c))])
-            record = {"rid": rid, "row": own.get("_row"), "values": {}, "raw": {}, "edited": {}, "issues": []}
+            record = {"rid": rid, "row": own.get("_row"), "sheet": own.get("_sheet"), "values": {}, "raw": {},
+                      "edited": {}, "issues": []}
             cell_issues: list[Issue] = []
             for column, value in zip(spec.columns, row[len(extra):]):
                 record["values"][column.name] = self._output_value(column, value, record, rid, cell_issues)
@@ -700,6 +753,20 @@ def _json(value):
     if isinstance(value, (dt.date, dt.datetime)):
         return value.isoformat()
     return value
+
+
+def _short(text, limit: int = 60) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _sheet_value(name: str, spec) -> str | None:
+    if spec.regex is None:
+        return name
+    match = spec.regex.search(name)
+    if not match:
+        return None
+    return match.group(1) if match.groups() else match.group(0)
 
 
 def _display(value) -> str:

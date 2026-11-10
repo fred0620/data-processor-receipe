@@ -223,3 +223,65 @@ def test_combine_requires_aggregate_bring():
     text = RECIPE.read_text(encoding="utf-8").replace("    mode: one_to_one\n", "    mode: one_to_one\n    rows: combine\n", 1)
     with pytest.raises(RecipeError):                           # combine 只能用在一對多或多對多
         load_recipe(text)
+
+
+STACKED = """
+recipe: 1
+id: stacked
+inputs:
+  item:
+    sheets: ["item_*"]
+    sheet_column: {name: year, regex: "(\\\\d{4})"}
+    columns:
+      code: {aliases: [品號], required: true}
+      price: {aliases: [單價], type: number, decimal: ","}
+      info: {aliases: [說明]}
+      origin: {source: info, extract: [{after: [產地, Origin], before: [規格]}, {line: 2}]}
+      spec: {source: info, extract: {after: 規格}}
+output:
+  from: item
+  columns:
+    - {name: 年度, from: year}
+    - {name: 品號, from: code}
+    - {name: 單價, from: price, type: number}
+    - {name: 產地, from: origin}
+    - {name: 規格, from: spec}
+"""
+
+
+def test_stacked_sheets_extract_and_decimal(tmp_path):
+    from openpyxl import Workbook
+
+    book = Workbook()
+    book.active.title = "invoice_2021"
+    book.active.append(["發票號碼"])
+    for year, rows in (("2021", [("A1", "1.000,02", "產地：台灣 規格：10mm"), ("A2", "12,5", "第一行\nJapan")]),
+                       ("2022", [("B1", "1.234.567,8", "ORIGIN = Vietnam"), ("B2", "1,000.5", "無說明")])):
+        sheet = book.create_sheet(f"item_{year}")
+        sheet.append(["品號", "單價", "說明"])
+        for row in rows:
+            sheet.append(list(row))
+    path = tmp_path / "stacked.xlsx"
+    book.save(path)
+    recipe = load_recipe(STACKED)
+    result = run(recipe, read_workbook(path), ReviewStore(tmp_path / "r", recipe.id, "x"),
+                 MappingStore(tmp_path / "m", recipe.id), tmp_path / "scratch")
+    rows = {r["values"]["品號"]: r for r in result["output"]["rows"]}
+    assert set(rows) == {"A1", "A2", "B1", "B2"}                       # 兩張 item_ 工作表疊在一起，invoice_ 不讀
+    assert rows["A1"]["values"]["年度"] == "2021" and rows["B1"]["values"]["年度"] == "2022"
+    assert rows["A1"]["values"]["單價"] == 1000.02 and rows["B1"]["values"]["單價"] == 1234567.8
+    assert rows["A2"]["values"]["單價"] == 12.5
+    assert rows["B2"]["values"]["單價"] is None                          # 1,000.5 不是逗號小數的寫法，標記不猜
+    assert rows["A1"]["values"]["產地"] == "台灣" and rows["A1"]["values"]["規格"] == "10mm"
+    assert rows["A2"]["values"]["產地"] == "Japan"                        # 沒有關鍵字時改用第二個寫法（第 2 行）
+    assert rows["B1"]["values"]["產地"] == "Vietnam"                      # 關鍵字不分大小寫，等號不帶進值
+    assert rows["B2"]["values"]["產地"] is None and rows["B2"]["values"]["規格"] is None
+    assert rows["A1"]["sheet"] == "item_2021"
+
+
+def test_yaml_anchors_aliases_and_tags_are_refused():
+    base = RECIPE.read_text(encoding="utf-8")
+    for bad in ("description: &d hello\nx: *d\n", "description: !!python/object/apply:os.system [ls]\n",
+                "description: !!str hello\n"):
+        with pytest.raises(RecipeError):
+            load_recipe(base.replace("description:", bad + "zzz:", 1))

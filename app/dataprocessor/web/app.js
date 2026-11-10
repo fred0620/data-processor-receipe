@@ -388,7 +388,7 @@ function renderRows(keepMenu = false) {
       onclick: () => { state.selected = row.rid; renderTabs(); },
     },
     el("td", { class: "status-col" }, el("span", { class: `dot ${row.status}` })),
-    el("td", { class: "rowno", text: row.row ?? "" }),
+    el("td", { class: "rowno", text: row.row ?? "", title: row.sheet ? `${row.sheet}・第 ${row.row} 列` : null }),
     columns.map((c) => {
       const flags = cellIssues(row, c.name);
       const value = row.values[c.name];
@@ -445,7 +445,8 @@ function renderDrawer() {
   $("drawer").hidden = !row;
   document.querySelector(".layout").classList.toggle("with-drawer", Boolean(row));
   if (!row) return;
-  $("drawerTitle").textContent = `第 ${row.row ?? "?"} 列`;
+  $("drawerTitle").textContent = row.sheet && state.result.inputs && Object.values(state.result.inputs).some((i) => (i.sheets || []).length > 1)
+    ? `${row.sheet}・第 ${row.row ?? "?"} 列` : `第 ${row.row ?? "?"} 列`;
   const issues = row.issues.map((i) => r.issues[i]).filter((i) => i.level !== "skip");
   const fields = r.output.columns.map((c) => {
     const input = el("input", { value: row.values[c.name] ?? "", disabled: !c.editable, placeholder: row.raw[c.name] ? `原始：${row.raw[c.name]}` : "" });
@@ -465,7 +466,8 @@ function renderDrawer() {
     issues.length ? el("section", {}, el("h4", { class: "section-title", text: "需要注意" }), el("div", { class: "list" }, issues.map((i) => issueLine(i)))) : null,
     el("section", {}, el("h4", { class: "section-title", text: "欄位" }), el("p", { class: "muted small-text", style: "margin:-4px 0 10px", text: "修改後按 Enter，會保留原值。" }), fields),
     el("section", {}, el("h4", { class: "section-title", text: "來源" }),
-      el("dl", { class: "kv" }, el("dt", { text: "列代號" }), el("dd", { text: row.rid }), el("dt", { text: "Excel 列" }), el("dd", { text: row.row ?? "" }))));
+      el("dl", { class: "kv" }, row.sheet ? [el("dt", { text: "工作表" }), el("dd", { text: row.sheet })] : null,
+        el("dt", { text: "Excel 列" }), el("dd", { text: row.row ?? "" }), el("dt", { text: "列代號" }), el("dd", { text: row.rid }))));
 }
 
 /* ---------- 配對 ---------- */

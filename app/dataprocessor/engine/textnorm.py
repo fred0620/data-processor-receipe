@@ -51,12 +51,15 @@ def clean_text(raw: str | None, ops: list[str] | None = None,
 
 CURRENCY_TOKENS = ["NT$", "US$", "HK$", "NTD", "TWD", "USD", "EUR", "JPY", "CNY", "RMB", "HKD", "GBP",
                    "$", "¥", "€", "£", "元", "圓"]
-_NUMBER = re.compile(r"[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?")
+_DIGITS = re.compile(r"\d+")
 
 
-def parse_number(raw: str | None, strip: list[str] | None = None) -> float | None:
+def parse_number(raw: str | None, strip: list[str] | None = None, decimal: str = ".") -> float | None:
     """解析數字。支援千分位、全形、貨幣符號、括號負數、尾端負號、百分比（12% → 0.12）。
-    其他文字（例如 12KG）不硬解析，回傳 None；需要去掉的單位寫在 recipe 的 strip。"""
+
+    decimal 是小數點符號：「.」時 1,000.02；「,」時 1.000,02（歐洲寫法）。千分位一定要三位一組，
+    否則不解析：例如 decimal 是「.」時，1,5 或 1.000,02 都會失敗並標記，不會被讀成錯的數字。
+    空白與單引號（1 000、1'000）一律當作千分位。其他文字（例如 12KG）不硬解析，要去掉的單位寫在 strip。"""
     if raw is None:
         return None
     text = halfwidth(str(raw)).strip()
@@ -68,7 +71,7 @@ def parse_number(raw: str | None, strip: list[str] | None = None) -> float | Non
             text = re.sub(rf"(?i)^{re.escape(token)}|{re.escape(token)}$", "", text.strip())
         else:
             text = text.replace(token, "")
-    text = text.replace(",", "").replace(" ", "")
+    text = re.sub(r"[\s'’\u00a0\u202f]", "", text)
     negative = False
     if text.startswith("(") and text.endswith(")"):
         negative, text = True, text[1:-1]
@@ -77,16 +80,75 @@ def parse_number(raw: str | None, strip: list[str] | None = None) -> float | Non
     percent = text.endswith("%")
     if percent:
         text = text[:-1]
-    if not _NUMBER.fullmatch(text):
+    sign = ""
+    if text[:1] in "+-":
+        sign, text = text[:1], text[1:]
+    group = "," if decimal == "." else "."
+    if text.count(decimal) > 1:
         return None
-    value = float(text)
+    whole, _, fraction = text.partition(decimal)
+    if group in whole and not re.fullmatch(rf"\d{{1,3}}({re.escape(group)}\d{{3}})+", whole):
+        return None                        # 千分位不是三位一組，可能是另一種小數點寫法，不猜
+    whole = whole.replace(group, "")
+    if (whole and not _DIGITS.fullmatch(whole)) or (fraction and not _DIGITS.fullmatch(fraction)) or not (whole or fraction):
+        if not re.fullmatch(r"\d+(\.\d+)?[eE][+-]?\d+", text):  # 科學記號（1.2E+5）
+            return None
+        value = float(text)
+    else:
+        value = float(f"{whole or 0}.{fraction or 0}")
+    if sign == "-":
+        value = -value
     if percent:
         value /= 100
     return -value if negative else value
 
 
-def parse_integer(raw: str | None, strip: list[str] | None = None) -> int | None:
-    value = parse_number(raw, strip)
+# ---------- 從儲存格取一部分 ----------
+
+def _keyword(word: str) -> re.Pattern:
+    """關鍵字比對：全半形相同、不分大小寫、空白多寡不拘。"""
+    parts = [re.escape(p) for p in halfwidth(word).split()]
+    return re.compile(r"\s*".join(parts), re.IGNORECASE)
+
+
+def extract(text: str | None, rules) -> str | None:
+    """依 recipe 的 extract 取值。多個寫法依序嘗試，第一個取得到值的就用；都取不到回傳 None。
+    每個寫法依序套用：第幾行 → 關鍵字之後 → 關鍵字之前 → 正規表達式。
+    第幾行、after、regex 對不到時，這個寫法就算失敗、換下一個；before 對不到時取到最後。"""
+    if text is None:
+        return None
+    base = halfwidth(str(text)).replace("\r\n", "\n").replace("\r", "\n")
+    for rule in rules:
+        value = base
+        if rule.line is not None:
+            lines = [line for line in value.split("\n")]
+            index = rule.line - 1 if rule.line > 0 else len(lines) + rule.line
+            if not 0 <= index < len(lines):
+                continue
+            value = lines[index]
+        if rule.after:
+            found = [m for m in (_keyword(w).search(value) for w in rule.after) if m]
+            if not found:
+                continue
+            first = min(found, key=lambda m: m.start())
+            value = re.sub(r"^\s*[:：=＝]?\s*", "", value[first.end():])   # 關鍵字後面的冒號、等號不帶進值
+        if rule.before:   # 找不到結束的關鍵字時取到最後，例如有時候後面沒有「規格」
+            found = [m for m in (_keyword(w).search(value) for w in rule.before) if m]
+            if found:
+                value = value[:min(m.start() for m in found)]
+        if rule.regex is not None:
+            match = rule.regex.search(value)
+            if not match:
+                continue
+            value = match.group(1) if match.groups() else match.group(0)
+        value = value.strip()
+        if value:
+            return value
+    return None
+
+
+def parse_integer(raw: str | None, strip: list[str] | None = None, decimal: str = ".") -> int | None:
+    value = parse_number(raw, strip, decimal)
     if value is None or value != int(value):
         return None
     return int(value)

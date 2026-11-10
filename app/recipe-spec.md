@@ -4,7 +4,7 @@
 
 ## 給 AI 的寫作規則
 
-1. 只輸出一份完整的 YAML，不要省略任何段落，不要加說明文字。
+1. 只輸出一份完整的 YAML，不要省略任何段落，不要加說明文字。不能使用錨點（`&`）、別名（`*`）和 `!` 開頭的標籤，同樣的內容請直接重複寫出來。
 2. recipe 不能包含 Python 或任何程式碼。邏輯判斷用下面的設定和 SQL（DuckDB 語法）表達。
 3. SQL 只能是一段 SELECT 或一個運算式，不能有分號。SQL 只看得到 recipe 裡定義的表，讀不到檔案也不能連網。
 4. 表名稱、欄位名稱用英文字母開頭，只用英數與底線，不能以 `dp_` 或 `_` 開頭。輸出欄位的顯示名稱可以用中文。
@@ -63,6 +63,21 @@ inputs:
       note: 備註                          # 簡寫：只寫表頭文字
 ```
 
+工作表：
+
+- `sheet`：候選工作表名稱，從中挑一張（表頭對到最多欄位的那張）。
+- `sheets`：工作表名稱的萬用字元（`*` 任意文字、`?` 一個字），符合的工作表**全部讀進來疊在一起**，例如每年一張的 `item_2021`、`item_2022`。每張各自找表頭，欄位順序不同也沒關係。`sheet` 和 `sheets` 擇一。
+- `sheet_column`：把工作表名稱放進一個欄位，`regex` 可以只取其中一段：
+
+```yaml
+  item:
+    sheets: ["item_*"]                                   # 不會讀到 invoice_2021
+    sheet_column: {name: year, regex: "(\\d{4})"}       # item_2022 → year = 2022
+    columns: ...
+```
+
+每一列另外有系統欄位 `_sheet`（工作表名稱）。
+
 欄位設定：
 
 | 設定 | 說明 |
@@ -73,6 +88,9 @@ inputs:
 | `text` | 文字清理，依序套用：`trim`、`upper`、`lower`、`halfwidth`（全形轉半形）、`collapse_space`、`no_space`、`digits_only`、`alnum_only`。預設 `[trim, collapse_space]` |
 | `replace` | 正規表達式取代，`[[pattern, 取代文字], ...]`，在轉型或清理前套用 |
 | `strip` | number／integer 用，解析前去掉的單位文字，例如 `[KG, 箱]` |
+| `decimal` | number／integer 用，小數點符號。`"."`（預設，1,000.02）或 `","`（歐洲寫法 1.000,02）。千分位一定要三位一組，對不上就標記，不會讀成錯的數字 |
+| `extract` | 只取儲存格裡的一部分，見下方 |
+| `source` | 取用同一張表另一個欄位的儲存格，用來把同一格拆成多個欄位（寫了 source 就不寫 aliases） |
 | `formats` | date 用，額外的 strftime 格式，例如 `["%d/%m/%Y"]` |
 | `roc` | date 用。`auto`（預設，年份小於 1000 視為民國）、`always`、`never` |
 | `map` | text 用，套用 `mappings` 裡的對照表 |
@@ -82,6 +100,48 @@ inputs:
 - **數字**：接受千分位、全形數字、貨幣符號與代碼（`$`、`NT$`、`USD` 等）、括號負數 `(150)`、尾端負號、百分比（`12%` 變成 0.12）。其他文字（例如「約 300」、「12KG」沒寫 strip）一律解析失敗、留空並標記。
 - **日期**：接受 `2026-01-05`、`2026/1/5`、`2026.1.5`、`20260105`、`2026年1月5日`、民國 `115/01/05`，以及 Excel 的日期格式。
 - 解析失敗時值留空，原始內容會顯示在畫面和 Excel，不會被塞進欄位。
+
+### extract：從儲存格取一部分
+
+一個寫法可以有下列設定，依序套用：
+
+| 設定 | 說明 |
+|---|---|
+| `line` | 第幾行（1 是第一行，-1 是最後一行） |
+| `after` | 取這些關鍵字之後的文字，可以列多個（任一個出現即可）。不分全半形、大小寫，空白多寡不拘，關鍵字後面的冒號、等號不會帶進值 |
+| `before` | 取到這些關鍵字之前；找不到時取到最後 |
+| `regex` | 正規表達式；有括號時取第一組 |
+
+`extract` 可以是一個寫法，也可以是清單：**依序嘗試，第一個取得到值的就用**。用來處理「有時候有這個關鍵字、有時候沒有」的資料。全部都取不到時值留空；欄位是 `required` 才會標記。
+
+同一格要拆成多個欄位時，第一個欄位用 `aliases` 指到儲存格，其他欄位用 `source` 取用同一格，各自寫 `extract`：
+
+```yaml
+      info: {aliases: [說明]}                       # 原始儲存格，例如「產地：台灣 規格：10mm」
+      origin:
+        source: info
+        extract:
+          - {after: [產地, Origin], before: [規格]}  # 有「產地」時
+          - {line: 2}                               # 沒有時改取第二行
+      size: {source: info, extract: {after: 規格}}
+      lot: {source: info, extract: {regex: "Lot\\s*(\\w+)"}}
+```
+
+### 一列裡跨欄位的判斷
+
+一個欄位的值要看另一個欄位決定（例如「備註有『退貨』時金額改成負數」「幣別空白時看發票號碼開頭」），在 transform 用 SQL 的 `CASE WHEN` 寫：
+
+```yaml
+transform:
+  - name: adjusted
+    sql: |
+      SELECT *,
+        CASE WHEN note LIKE '%退貨%' THEN -abs(amount) ELSE amount END AS amount_signed,
+        coalesce(currency, CASE WHEN invoice_no LIKE 'JP%' THEN 'JPY' ELSE 'TWD' END) AS currency_fixed
+      FROM invoice
+```
+
+inputs 處理「一個儲存格怎麼讀」，transform 處理「欄位之間的邏輯」。
 
 ## gate：篩選
 
