@@ -14,6 +14,10 @@ param(
     [string]$Work = (Join-Path $env:TEMP "dp-update-test")
 )
 $ErrorActionPreference = "Stop"
+# 從 PowerShell 7 的視窗執行時，會繼承 7 的模組路徑，5.1 會載入不相容的模組（例如找不到 Get-FileHash）
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -and $_ -notmatch '\\PowerShell\\' }) -join ';'
+}
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 
 $Repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)

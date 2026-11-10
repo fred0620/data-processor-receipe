@@ -15,6 +15,10 @@
 # runtime\ 放 uv、Python 和套件，壞掉時可以整個刪掉，下次啟動會重建。
 # 全部都在這個資料夾內，不會安裝到系統 Python，也不會改動 PATH。
 $ErrorActionPreference = "Stop"
+# 從 PowerShell 7 的視窗執行時，會繼承 7 的模組路徑，5.1 會載入不相容的模組（例如找不到 Get-FileHash）
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    $env:PSModulePath = (($env:PSModulePath -split ';') | Where-Object { $_ -and $_ -notmatch '\\PowerShell\\' }) -join ';'
+}
 $ProgressPreference = "SilentlyContinue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
