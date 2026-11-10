@@ -1,0 +1,15 @@
+[project]
+name = "data-processor"
+version = "0.1.0"
+description = "資料處理器"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "flask>=3.0",
+]
+
+[dependency-groups]
+# 只有開發、測試、重建手冊才需要，使用者不會安裝
+dev = ["markdown>=3.5", "pytest>=8"]
+
+[tool.uv]
+package = false

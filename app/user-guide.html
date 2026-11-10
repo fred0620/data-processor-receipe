@@ -1,0 +1,106 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>資料處理器使用手冊</title><style>
+:root { --ink:#000; --soft:#565b57; --rule:#c6cac5; --green:#2C5F34; }
+body { margin:0; background:#fff; color:var(--ink);
+  font:16px/1.75 "Noto Sans TC","PingFang TC","Microsoft JhengHei",Helvetica,sans-serif; }
+main { max-width:800px; margin:0 auto; padding:40px 20px 80px; }
+.toc { border-top:1.5px solid var(--ink); border-bottom:1px solid var(--ink); padding:10px 0; margin:24px 0; }
+.toc ul { list-style:none; margin:0; padding:0; columns:2; }
+.toc ul ul { display:none; }
+.toc a { color:var(--ink); text-decoration:none; }
+.toc a:hover { color:var(--green); text-decoration:underline; }
+h1 { font-size:30px; line-height:1.3; margin:0 0 12px; }
+h2 { font-size:22px; margin:48px 0 10px; padding-top:8px; border-top:2px solid var(--ink); }
+h3 { font-size:17px; margin:30px 0 6px; }
+p { margin:10px 0; }
+strong { font-weight:700; }
+a { color:var(--green); }
+img { display:block; max-width:100%; height:auto; margin:14px 0 20px; border:1px solid var(--rule); }
+table { width:100%; border-collapse:collapse; margin:14px 0 22px; font-size:15px; }
+th { text-align:left; padding:6px 10px 6px 0; border-top:1.5px solid var(--ink); border-bottom:1px solid var(--ink); }
+td { text-align:left; padding:6px 10px 6px 0; border-bottom:1px solid #e6e8e5; vertical-align:top; }
+tbody tr:last-child td { border-bottom:1.5px solid var(--ink); }
+blockquote { margin:16px 0; padding:2px 0 2px 14px; border-left:3px solid var(--green); }
+code { background:#f0f1ef; padding:1px 4px; font-size:.9em; font-family:Consolas,Menlo,monospace; }
+pre { background:#f0f1ef; padding:12px 14px; overflow-x:auto; }
+pre code { background:none; padding:0; }
+@media print { h2 { break-after:avoid; } img { break-inside:avoid; } }
+</style></head><body><main><h1 id="_1">資料處理器使用手冊</h1>
+<p>待填：一兩句話說明這個工具能幫你做什麼。全部在你的電腦上執行，資料不會上傳到任何地方。</p>
+<div class="toc">
+<ul>
+<li><a href="#1">1. 安裝與啟動</a></li>
+<li><a href="#2">2. 操作說明</a></li>
+<li><a href="#3">3. 檔案與資料安全</a></li>
+<li><a href="#4">4. 常見問題</a></li>
+</ul>
+</div>
+<h2 id="1">1. 安裝與啟動</h2>
+<h3 id="_2">第一次安裝</h3>
+<p>不需要先安裝 Python，工具會自己準備。</p>
+<p><strong>步驟一：取得工具。</strong> 到公司 GitLab 專案的 <strong>Releases</strong> 頁，下載最新的 <code>data-processor-版本.zip</code>。</p>
+<p><strong>步驟二：解壓縮。</strong> 解壓到固定位置，例如 <code>文件\data-processor</code>。不要在壓縮檔裡直接執行。</p>
+<blockquote>
+<p>從瀏覽器下載的 ZIP 要先解除封鎖再解壓，不然雙擊 <code>run.bat</code> 可能跳出安全性警告或沒有反應。步驟見<a href="update-guide.html">換版說明</a>第 2 節。</p>
+</blockquote>
+<p><strong>步驟三：啟動。</strong></p>
+<ul>
+<li><strong>Windows</strong>：雙擊 <code>run.bat</code>。</li>
+<li><strong>macOS</strong>：開啟終端機，進入資料夾後輸入 <code>bash run.sh</code>。</li>
+</ul>
+<p>第一次會自動下載 uv 和 Python，約 1 到 3 分鐘。套件已經附在 ZIP 裡，不需要連到 PyPI。完成後瀏覽器會自動開啟工具。</p>
+<p>啟動後，工具資料夾會長這樣：</p>
+<p><img alt="工具資料夾的四個部分" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA3NjAgMjcwIiB3aWR0aD0iNzYwIiBoZWlnaHQ9IjI3MCI+CiAgPHJlY3Qgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgZmlsbD0iI2ZmZmZmZiIvPgogIDx0ZXh0IHg9IjMyIiB5PSIzMCIgZm9udC1mYW1pbHk9IidOb3RvIFNhbnMgVEMnLCdOb3RvIFNhbnMgQ0pLIFRDJywnTWljcm9zb2Z0IEpoZW5nSGVpJywnUGluZ0ZhbmcgVEMnLEhlbHZldGljYSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjEyIiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjNjY2NjY2IiB0ZXh0LWFuY2hvcj0ic3RhcnQiPuizh+aWmeWkvjwvdGV4dD4KICA8dGV4dCB4PSIyNTAiIHk9IjMwIiBmb250LWZhbWlseT0iJ05vdG8gU2FucyBUQycsJ05vdG8gU2FucyBDSksgVEMnLCdNaWNyb3NvZnQgSmhlbmdIZWknLCdQaW5nRmFuZyBUQycsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTIiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiM2NjY2NjYiIHRleHQtYW5jaG9yPSJzdGFydCI+5YWn5a65PC90ZXh0PgogIDx0ZXh0IHg9IjQ3MCIgeT0iMzAiIGZvbnQtZmFtaWx5PSInTm90byBTYW5zIFRDJywnTm90byBTYW5zIENKSyBUQycsJ01pY3Jvc29mdCBKaGVuZ0hlaScsJ1BpbmdGYW5nIFRDJyxIZWx2ZXRpY2Esc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMiIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzY2NjY2NiIgdGV4dC1hbmNob3I9InN0YXJ0Ij7mm7TmlrDmmYI8L3RleHQ+CiAgPGxpbmUgeDE9IjI0IiB5MT0iNDIiIHgyPSI3MzYiIHkyPSI0MiIgc3Ryb2tlPSIjMTExMTExIiBzdHJva2Utd2lkdGg9IjEuMiIvPgogIDxwYXRoIGQ9Ik0zNCw2NCBoOSBsNSw1IHYxMyBoLTE0IHogTTQzLDY0IHY1IGg1IiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiM2NjY2NjYiIHN0cm9rZS13aWR0aD0iMS4yIi8+CiAgPHRleHQgeD0iNTgiIHk9Ijc4IiBmb250LWZhbWlseT0iJ05vdG8gU2FucyBUQycsJ05vdG8gU2FucyBDSksgVEMnLCdNaWNyb3NvZnQgSmhlbmdIZWknLCdQaW5nRmFuZyBUQycsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI0MDAiIGZpbGw9IiMxMTExMTEiIHRleHQtYW5jaG9yPSJzdGFydCI+cnVuLmJhdDwvdGV4dD4KICA8dGV4dCB4PSIyNTAiIHk9Ijc4IiBmb250LWZhbWlseT0iJ05vdG8gU2FucyBUQycsJ05vdG8gU2FucyBDSksgVEMnLCdNaWNyb3NvZnQgSmhlbmdIZWknLCdQaW5nRmFuZyBUQycsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI0MDAiIGZpbGw9IiMxMTExMTEiIHRleHQtYW5jaG9yPSJzdGFydCI+5YWl5Y+j77yM6ZuZ5pOK6ZaL5ZWf5bel5YW3PC90ZXh0PgogIDx0ZXh0IHg9IjQ3MCIgeT0iNzgiIGZvbnQtZmFtaWx5PSInTm90byBTYW5zIFRDJywnTm90byBTYW5zIENKSyBUQycsJ01pY3Jvc29mdCBKaGVuZ0hlaScsJ1BpbmdGYW5nIFRDJyxIZWx2ZXRpY2Esc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZm9udC13ZWlnaHQ9IjQwMCIgZmlsbD0iIzY2NjY2NiIgdGV4dC1hbmNob3I9InN0YXJ0Ij7mj5vmlrA8L3RleHQ+CiAgPGxpbmUgeDE9IjI0IiB5MT0iOTgiIHgyPSI3MzYiIHkyPSI5OCIgc3Ryb2tlPSIjZDlkOWQ5IiBzdHJva2Utd2lkdGg9IjEiLz4KICA8cGF0aCBkPSJNMzIsMTEyIGg2IGwyLDIgaDEwIHYxMCBoLTE4IHoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iIzY2NjY2NiIgc3Ryb2tlLXdpZHRoPSIxLjIiLz4KICA8dGV4dCB4PSI1OCIgeT0iMTIyIiBmb250LWZhbWlseT0iJ05vdG8gU2FucyBUQycsJ05vdG8gU2FucyBDSksgVEMnLCdNaWNyb3NvZnQgSmhlbmdIZWknLCdQaW5nRmFuZyBUQycsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI0MDAiIGZpbGw9IiMxMTExMTEiIHRleHQtYW5jaG9yPSJzdGFydCI+YXBwPC90ZXh0PgogIDx0ZXh0IHg9IjI1MCIgeT0iMTIyIiBmb250LWZhbWlseT0iJ05vdG8gU2FucyBUQycsJ05vdG8gU2FucyBDSksgVEMnLCdNaWNyb3NvZnQgSmhlbmdIZWknLCdQaW5nRmFuZyBUQycsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI0MDAiIGZpbGw9IiMxMTExMTEiIHRleHQtYW5jaG9yPSJzdGFydCI+56iL5byP5pys6LqrPC90ZXh0PgogIDx0ZXh0IHg9IjQ3MCIgeT0iMTIyIiBmb250LWZhbWlseT0iJ05vdG8gU2FucyBUQycsJ05vdG8gU2FucyBDSksgVEMnLCdNaWNyb3NvZnQgSmhlbmdIZWknLCdQaW5nRmFuZyBUQycsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI0MDAiIGZpbGw9IiM2NjY2NjYiIHRleHQtYW5jaG9yPSJzdGFydCI+5pW05YyF5o+b5paw77yM5LiN6KaB5pS+6Ieq5bex55qE5qqU5qGIPC90ZXh0PgogIDxsaW5lIHgxPSIyNCIgeTE9IjE0MiIgeDI9IjczNiIgeTI9IjE0MiIgc3Ryb2tlPSIjZDlkOWQ5IiBzdHJva2Utd2lkdGg9IjEiLz4KICA8cGF0aCBkPSJNMzIsMTU2IGg2IGwyLDIgaDEwIHYxMCBoLTE4IHoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iIzJDNUYzNCIgc3Ryb2tlLXdpZHRoPSIxLjIiLz4KICA8dGV4dCB4PSI1OCIgeT0iMTY2IiBmb250LWZhbWlseT0iJ05vdG8gU2FucyBUQycsJ05vdG8gU2FucyBDSksgVEMnLCdNaWNyb3NvZnQgSmhlbmdIZWknLCdQaW5nRmFuZyBUQycsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMyQzVGMzQiIHRleHQtYW5jaG9yPSJzdGFydCI+d29ya3NwYWNlPC90ZXh0PgogIDx0ZXh0IHg9IjI1MCIgeT0iMTY2IiBmb250LWZhbWlseT0iJ05vdG8gU2FucyBUQycsJ05vdG8gU2FucyBDSksgVEMnLCdNaWNyb3NvZnQgSmhlbmdIZWknLCdQaW5nRmFuZyBUQycsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI0MDAiIGZpbGw9IiMxMTExMTEiIHRleHQtYW5jaG9yPSJzdGFydCI+5L2g55qE6LOH5paZ44CB5Yyv5Ye657WQ5p6c44CB57SA6YyEPC90ZXh0PgogIDx0ZXh0IHg9IjQ3MCIgeT0iMTY2IiBmb250LWZhbWlseT0iJ05vdG8gU2FucyBUQycsJ05vdG8gU2FucyBDSksgVEMnLCdNaWNyb3NvZnQgSmhlbmdIZWknLCdQaW5nRmFuZyBUQycsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiMyQzVGMzQiIHRleHQtYW5jaG9yPSJzdGFydCI+5LiN5pyD5YuV5YiwPC90ZXh0PgogIDxsaW5lIHgxPSIyNCIgeTE9IjE4NiIgeDI9IjczNiIgeTI9IjE4NiIgc3Ryb2tlPSIjZDlkOWQ5IiBzdHJva2Utd2lkdGg9IjEiLz4KICA8cGF0aCBkPSJNMzIsMjAwIGg2IGwyLDIgaDEwIHYxMCBoLTE4IHoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iIzY2NjY2NiIgc3Ryb2tlLXdpZHRoPSIxLjIiLz4KICA8dGV4dCB4PSI1OCIgeT0iMjEwIiBmb250LWZhbWlseT0iJ05vdG8gU2FucyBUQycsJ05vdG8gU2FucyBDSksgVEMnLCdNaWNyb3NvZnQgSmhlbmdIZWknLCdQaW5nRmFuZyBUQycsSGVsdmV0aWNhLHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZvbnQtd2VpZ2h0PSI0MDAiIGZpbGw9IiMxMTExMTEiIHRleHQtYW5jaG9yPSJzdGFydCI+cnVudGltZTwvdGV4dD4KICA8dGV4dCB4PSIyNTAiIHk9IjIxMCIgZm9udC1mYW1pbHk9IidOb3RvIFNhbnMgVEMnLCdOb3RvIFNhbnMgQ0pLIFRDJywnTWljcm9zb2Z0IEpoZW5nSGVpJywnUGluZ0ZhbmcgVEMnLEhlbHZldGljYSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjE0IiBmb250LXdlaWdodD0iNDAwIiBmaWxsPSIjMTExMTExIiB0ZXh0LWFuY2hvcj0ic3RhcnQiPlB5dGhvbiDoiIflpZfku7Y8L3RleHQ+CiAgPHRleHQgeD0iNDcwIiB5PSIyMTAiIGZvbnQtZmFtaWx5PSInTm90byBTYW5zIFRDJywnTm90byBTYW5zIENKSyBUQycsJ01pY3Jvc29mdCBKaGVuZ0hlaScsJ1BpbmdGYW5nIFRDJyxIZWx2ZXRpY2Esc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxNCIgZm9udC13ZWlnaHQ9IjQwMCIgZmlsbD0iIzY2NjY2NiIgdGV4dC1hbmNob3I9InN0YXJ0Ij7kuI3nlKjnrqHvvIzlo57mjonlj6/ku6XliKrmjonph43lu7o8L3RleHQ+CiAgPGxpbmUgeDE9IjI0IiB5MT0iMjMwIiB4Mj0iNzM2IiB5Mj0iMjMwIiBzdHJva2U9IiMxMTExMTEiIHN0cm9rZS13aWR0aD0iMS4yIi8+CiAgPHRleHQgeD0iMzIiIHk9IjI1OCIgZm9udC1mYW1pbHk9IidOb3RvIFNhbnMgVEMnLCdOb3RvIFNhbnMgQ0pLIFRDJywnTWljcm9zb2Z0IEpoZW5nSGVpJywnUGluZ0ZhbmcgVEMnLEhlbHZldGljYSxzYW5zLXNlcmlmIiBmb250LXNpemU9IjEyIiBmb250LXdlaWdodD0iNDAwIiBmaWxsPSIjNjY2NjY2IiB0ZXh0LWFuY2hvcj0ic3RhcnQiPndvcmtzcGFjZSDlkowgcnVudGltZSDmmK/nrKzkuIDmrKHpm5nmk4ogcnVuLmJhdCDmmYLoh6rli5Xlu7rnq4vnmoTvvIzkuIvovInnmoQgWklQIOijoeaykuacieWug+WAkeOAgjwvdGV4dD4KPC9zdmc+Cg==" /></p>
+<p>記住一件事就好：<strong>你的資料都在 <code>workspace</code></strong>。<code>app</code> 是程式本身，每次更新都會整包換掉，不要在裡面放自己的檔案。</p>
+<blockquote>
+<p>全部都在這個資料夾內，電腦上原本的 Python 不受影響，也不會改動系統設定。不想用了，刪掉整個資料夾就好；要保留資料的話，先備份 <code>workspace</code>。</p>
+</blockquote>
+<h3 id="_3">之後每次使用</h3>
+<p>雙擊 <code>run.bat</code> 就好。那個黑色視窗就是工具本身，<strong>使用時不要關掉</strong>。</p>
+<p>用完時，關閉瀏覽器頁面或黑色視窗都可以。關閉頁面約 10 秒後，工具會自動結束。工具已經開著時再雙擊 <code>run.bat</code>，只會開啟原本的頁面，不會多開一個。</p>
+<p>工具右上角的「使用手冊」連結可以隨時開啟這份手冊，左上角顯示目前的版本號。</p>
+<h3 id="_4">更新與退回版本</h3>
+<p>更新到新版、新版有問題時退回，都寫在 <strong><a href="update-guide.html">換版說明</a></strong>，有圖解。換版不會動到 <code>workspace</code> 裡的資料。</p>
+<h3 id="github">公司電腦不能連網，或擋 GitHub</h3>
+<p>套件已經附在 ZIP 裡，只有第一次的 uv 和 Python 需要從 GitHub 下載。如果公司擋 GitHub：</p>
+<ol>
+<li>在一台能連網的 Windows 64 位元電腦上解壓 ZIP，雙擊 <code>run.bat</code> 一次，讓它下載完成。</li>
+<li>把整個資料夾複製到目標電腦，但不要複製 <code>runtime\venv</code>、<code>runtime\cache</code> 和 <code>workspace</code>。</li>
+<li>雙擊 <code>run.bat</code>，工具會直接使用複製過來的檔案，全程不連網。</li>
+</ol>
+<h2 id="2">2. 操作說明</h2>
+<p>待填：照使用者實際的工作順序寫，每一步配一張截圖。</p>
+<h2 id="3">3. 檔案與資料安全</h2>
+<table>
+<thead>
+<tr>
+<th>資料夾</th>
+<th>內容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>workspace/output</code></td>
+<td>匯出的檔案</td>
+</tr>
+<tr>
+<td><code>workspace/uploads</code></td>
+<td>上傳到工具的暫存複本，結束時清除</td>
+</tr>
+<tr>
+<td><code>workspace/logs</code></td>
+<td>操作與錯誤紀錄，不記檔名和資料內容</td>
+</tr>
+</tbody>
+</table>
+<p>工具只接受本機（127.0.0.1）的連線，其他網站無法透過瀏覽器讀取或操作工具裡的資料。遇到錯誤時，畫面只顯示一般訊息，詳細原因寫在 <code>workspace/logs/app.log</code>，回報問題時附上這個檔案即可。匯出的檔案不會自動清除，請依公司規定保管。</p>
+<h2 id="4">4. 常見問題</h2>
+<p><strong>顯示「無法下載 uv」或「環境建立失敗」</strong>
+通常是公司網路阻擋 GitHub，請改用第 1 節的離線安裝。</p>
+<p><strong>安裝到一半中斷</strong>
+重新執行 <code>run.bat</code> 會接續完成。還是失敗時，刪除 <code>runtime</code> 資料夾再試一次。</p>
+<p><strong>瀏覽器沒有自動開啟</strong>
+看黑色視窗裡顯示的網址，例如 <code>http://127.0.0.1:8765</code>，貼到瀏覽器。</p>
+<p><strong>畫面顯示「工具已經關閉」</strong>
+黑色視窗被關掉了。重新執行 <code>run.bat</code>，再重新整理頁面。</p>
+<p><strong>更新後有問題</strong>
+執行 <code>run.bat rollback</code> 退回上一版，並把版本號和 <code>workspace/logs/app.log</code> 回報給負責人。詳細步驟見<a href="update-guide.html">換版說明</a>。</p></main></body></html>

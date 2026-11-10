@@ -1,0 +1,27 @@
+/* 只用系統字型與純 CSS，不下載任何字型或套件，公司網路擋外部資源時也能正常顯示。 */
+:root {
+  --text: #1a1a1a;
+  --soft: #666666;
+  --line: #dddddd;
+  --canvas: #f6f6f5;
+  --accent: #2c5f34;
+  --danger: #b91c1c;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--canvas); color: var(--text);
+  font: 14px/1.6 "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", Helvetica, sans-serif;
+}
+.bar { display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: #fff; border-bottom: 1px solid var(--line); }
+.bar h1 { margin: 0; font-size: 15px; font-weight: 600; flex: 1; }
+.bar .version { margin-left: 4px; color: var(--soft); font-size: 12.5px; font-weight: 500; }
+.manual-link { color: var(--accent); font-size: 13px; text-decoration: none; }
+.manual-link:hover { text-decoration: underline; }
+.content { max-width: 720px; margin: 32px auto; padding: 0 20px; }
+.hint { color: var(--soft); }
+.row { display: flex; gap: 8px; }
+input { flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+button { padding: 8px 16px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+.result { min-height: 1.6em; }
+.toast { position: fixed; right: 20px; bottom: 20px; max-width: 360px; padding: 10px 14px; border-radius: 6px; background: #fff; border: 1px solid var(--line); box-shadow: 0 4px 16px rgba(0,0,0,.08); }
+.toast.bad { border-color: var(--danger); color: var(--danger); }

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>資料處理器</title>
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<header class="bar">
+  <h1>資料處理器 <span id="version" class="version"></span></h1>
+  <a class="manual-link" href="/manual" target="_blank" rel="noopener">使用手冊</a>
+</header>
+<main class="content">
+  <p class="hint">這是範例畫面。把這裡換成工具的功能；資料只在這台電腦處理。</p>
+  <form id="exampleForm" class="row">
+    <input id="exampleInput" type="text" placeholder="輸入文字試試看" maxlength="1000">
+    <button type="submit">送出</button>
+  </form>
+  <p id="result" class="result" role="status"></p>
+</main>
+<div id="toast" class="toast" role="alert" hidden></div>
+<script src="/web/app.js"></script>
+</body>
+</html>
