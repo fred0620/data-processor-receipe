@@ -723,7 +723,6 @@ class _Run:
                     if issue.code in ("parse", "unmapped") and raw is not None and record["values"].get(target) is None:
                         record["raw"][target] = raw
                 record["issues"].append(number)
-        self._refresh_after_review()
         for record in out_rows:  # 同一格已經有解析或對照問題時，不再重複提醒「必填空白」
             explained = {c for i in record["issues"] for c in self.issues[i].out_columns
                          if self.issues[i].code in ("parse", "unmapped")}
@@ -733,25 +732,22 @@ class _Run:
                     issue.level = "skip"
             record["issues"] = [i for i in record["issues"] if self.issues[i].level != "skip"]
         for record in out_rows:
-            active = [self.issues[i] for i in record["issues"] if not self.issues[i].dismissed]
+            issues = [self.issues[i] for i in record["issues"]]
+            active = [i for i in issues if not i.dismissed]
+            handled = any(i.dismissed and i.level == "review" for i in issues) or bool(record["edited"])
             record["status"] = ("review" if any(i.level == "review" for i in active)
-                                else "notice" if active else "ok")
+                                else "notice" if active else "confirmed" if handled else "ok")
         self.output = {"sheet": spec.sheet, "columns": [
             {"name": c.name, "type": c.type, "map": c.map, "required": c.required, "editable": c.editable}
             for c in spec.columns], "rows": out_rows}
 
-        review_rows = sum(1 for r in out_rows if r["status"] == "review")
-        unmapped = sum(e["count"] for e in self.mapper.unmapped.values() if e["missing"] == "ask")
         if self.recipe.mappings:
             added = sum(len(v) for v in self.mapper.added.values())
             self.stage("mapping", f"對照表 {len(self.recipe.mappings)} 張" + (f"，介面補上的對照 {added} 筆" if added else ""))
-        self.stage("mapping", f"待補對照 {unmapped} 格" if unmapped else "所有值都有對照", "review" if unmapped else None)
         edited = sum(len(r["edited"]) for r in out_rows)
         if edited:
             self.stage("mapping", f"人工修改 {edited} 格")
-        self.stage("export", f"輸出 {len(out_rows)} 列，需檢查 {review_rows} 列", "review" if review_rows else None)
-        self.summary("mapping", f"待補 {unmapped} 格" if unmapped else "完成" if self.recipe.mappings else "未設定")
-        self.summary("export", f"{len(out_rows)} 列・{review_rows} 列需檢查" if review_rows else f"{len(out_rows)} 列")
+        self._finalize_stages(out_rows)
 
     def _output_value(self, column, value, record: dict, rid: str, issues: list[Issue]):
         def flag(level: str, code: str, message: str) -> None:
@@ -798,12 +794,59 @@ class _Run:
             return mapped
         return text
 
-    def _refresh_after_review(self) -> None:
-        """套上「確認無誤」之後，重算流程卡片：已確認的不再算待處理。"""
-        active = [i for i in self.issues if not i.dismissed and i.level == "review"]
+    def _finalize_stages(self, out_rows: list[dict]) -> None:
+        """套上人工決定（確認無誤、指定配對、修改）之後，重算每張流程卡片。
+
+        卡片、分頁數字、配對的「需處理」都以同一個依據計算：還沒被確認的「需檢查」警示。
+        狀態：review（還有要處理的）、confirmed（有過問題，都已確認）、ok（沒有問題）。"""
+        def status(open_count: int, done_count: int) -> str:
+            return "review" if open_count else "confirmed" if done_count else "ok"
+
+        review = [i for i in self.issues if i.level == "review"]
+
+        def split(predicate):
+            hits = [i for i in review if predicate(i)]
+            return [i for i in hits if not i.dismissed], [i for i in hits if i.dismissed]
+
+        # Gate：每一列都被排除時的提醒
+        open_, done = split(lambda i: i.stage == "gate")
+        if open_ or done:
+            self.stages["gate"]["status"] = status(len(open_), len(done))
+
+        # Normalize：讀不懂、必填空白、不在對照表
+        open_, done = split(lambda i: i.stage == "normalize")
+        stage = self.stages["normalize"]
+        if stage["status"] != "error":
+            stage["status"] = status(len(open_), len(done))
+            stage["summary"] = (f"{len(open_)} 格待處理" if open_ else f"已確認 {len(done)} 格" if done else "完成")
+            stage["groups"] = _groups(open_ + done, "normalize")
+
+        # Match：以列為單位，還有未確認警示的列才算需處理
+        if self.matches:
+            todo_total = 0
+            for match in self.matches:
+                by_rid: dict[str, list[Issue]] = {}
+                for issue in review:
+                    if issue.ref == match["name"] and issue.rid:
+                        by_rid.setdefault(issue.rid, []).append(issue)
+                todo = 0
+                for row in match["rows"]:
+                    issues = by_rid.get(row["left"], [])
+                    row["open"] = any(not i.dismissed for i in issues)
+                    row["acknowledged"] = bool(issues) and not row["open"]   # 有過問題，已確認
+                    todo += row["open"]
+                match["counts"]["todo"] = todo
+                todo_total += todo
+            open_, done = split(lambda i: i.stage == "match")
+            stage = self.stages["match"]
+            if stage["status"] != "error":
+                stage["status"] = status(todo_total, len(done))
+                stage["summary"] = f"{todo_total} 列待處理" if todo_total else ("已全部確認" if done else "全部完成")
+
+        # Validate：每條規則各自計算
         if self.check_info:
             stage = self.stages["validate"]
-            stage["lines"], stage["checks"], flagged = [], [], 0
+            stage["lines"], stage["checks"], open_total, done_total = [], [], 0, 0
             for info in self.check_info:
                 hits = [i for i in self.issues if i.code == info["code"]]
                 open_hits = [i for i in hits if not i.dismissed]
@@ -811,22 +854,30 @@ class _Run:
                 stage["checks"].append({**info, "rows": len(hits), "open": len(open_hits), "done": done})
                 stage["lines"].append(f"{info['message']}：{len(hits)} 列" + (f"（已確認 {done}）" if done else ""))
                 if info["level"] == "review":
-                    flagged += len(open_hits)
-            stage["status"] = "review" if flagged else "ok"
-            stage["summary"] = f"{flagged} 列有問題" if flagged else (
-                "全部通過" if not any(c["rows"] for c in stage["checks"]) else "已全部確認")
-        for sid in ("normalize", "match"):
-            stage = self.stages[sid]
-            if stage["status"] != "review":
-                continue
-            remaining = [i for i in active if i.stage == sid]
-            if not remaining:
-                stage["status"] = "ok"
-                stage["summary"] = "已全部確認"
-            elif sid == "normalize":
-                stage["summary"] = f"{len(remaining)} 格待處理"
-            else:
-                stage["summary"] = f"{len({i.rid for i in remaining})} 列待處理"
+                    open_total += len(open_hits)
+                    done_total += done
+            if stage["status"] != "error":
+                stage["status"] = status(open_total, done_total)
+                stage["summary"] = (f"{open_total} 列有問題" if open_total else f"已確認 {done_total} 列" if done_total
+                                    else "全部通過")
+
+        # Mapping：還沒補的對照
+        stage = self.stages["mapping"]
+        open_, done = split(lambda i: i.code == "unmapped" or (i.stage == "mapping" and i.code != "edit_stale"))
+        pending = sum(e["count"] for e in self.mapper.unmapped.values() if e["missing"] == "ask")
+        if self.recipe.mappings or open_ or done:
+            stage["lines"].append(f"待補對照 {pending} 格" if pending else "所有值都有對照")
+            stage["status"] = status(len(open_), len(done))
+            stage["summary"] = (f"待補 {len(open_)} 格" if open_ else f"已確認 {len(done)} 格" if done
+                                else "完成" if self.recipe.mappings else "沒有問題")
+
+        # Export：以輸出的列為單位
+        review_rows = sum(1 for r in out_rows if r["status"] == "review")
+        confirmed_rows = sum(1 for r in out_rows if r["status"] == "confirmed")
+        stage = self.stages["export"]
+        stage["lines"] = [f"輸出 {len(out_rows)} 列，需檢查 {review_rows} 列，已確認 {confirmed_rows} 列"]
+        stage["status"] = status(review_rows, confirmed_rows)
+        stage["summary"] = f"{len(out_rows)} 列・{review_rows} 列需檢查" if review_rows else f"{len(out_rows)} 列"
 
     # ---------- 結果 ----------
 
@@ -874,6 +925,20 @@ def _rule_label(rule) -> str:
     if rule.regex is not None:
         parts.append(f"符合 {rule.regex.pattern}")
     return "、".join(parts)
+
+
+_GROUP_LABELS = {"parse": "讀不懂", "required": "必填空白", "unmapped": "不在對照表", "extract": "取不到內容",
+                 "edit_stale": "修改後原值變了"}
+
+
+def _groups(issues: list, stage: str) -> list[dict]:
+    """把同一種問題歸成一組，流程卡片用來顯示「哪一種有幾格」並連到那些列。"""
+    groups: dict[str, dict] = {}
+    for issue in issues:
+        group = groups.setdefault(issue.code, {"code": issue.code, "stage": stage,
+                                               "label": _GROUP_LABELS.get(issue.code, issue.code), "open": 0, "done": 0})
+        group["done" if issue.dismissed else "open"] += 1
+    return list(groups.values())
 
 
 def _short(text, limit: int = 60) -> str:

@@ -7,24 +7,26 @@ from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.comments import Comment
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 BOLD = Font(bold=True)
 REVIEW_FILL = PatternFill("solid", fgColor="FDE7CF")
 NOTICE_FILL = PatternFill("solid", fgColor="EEF2F7")
-STATUS = {"ok": "正常", "review": "需檢查", "notice": "提示"}
+STATUS = {"ok": "正常", "review": "需檢查", "notice": "提示", "confirmed": "已確認"}
 LEVEL = {"review": "需檢查", "notice": "提示", "error": "無法執行"}
-MATCH_STATUS = {"auto": "自動配對", "review": "配對待確認", "manual": "人工指定", "none": "人工確認沒有配對",
+MATCH_STATUS = {"auto": "自動配對", "review": "配對待確認", "confirmed": "配對已確認", "manual": "人工指定", "none": "人工確認沒有配對",
                 "ambiguous": "多筆候選", "unmatched": "找不到"}
 
 
 def _text(cell, value) -> None:
-    """文字一律強制為文字格式，避免 = + - @ 開頭的內容被 Excel 當成公式。"""
+    """文字一律強制為文字格式，避免 = + - @ 開頭的內容被 Excel 當成公式。多行文字自動換行。"""
     cell.value = CONTROL.sub("", str(value))
     cell.data_type = "s"
     cell.number_format = "@"
+    if "\n" in cell.value:
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
 
 
 def _put(cell, value, kind: str = "text") -> None:
@@ -50,7 +52,7 @@ def _header(sheet, names: list[str]) -> None:
 
 def _widths(sheet) -> None:
     for column in sheet.columns:
-        longest = max((len(str(c.value)) * (2 if re.search(r"[^\x00-\x7f]", str(c.value or "")) else 1)
+        longest = max((max(len(part) for part in str(c.value).split("\n")) * (2 if re.search(r"[^\x00-\x7f]", str(c.value or "")) else 1)
                        for c in column if c.value is not None), default=6)
         sheet.column_dimensions[get_column_letter(column[0].column)].width = min(max(longest + 2, 8), 60)
 

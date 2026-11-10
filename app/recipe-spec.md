@@ -88,7 +88,7 @@ inputs:
 | `aliases` | 表頭文字，可以多個。必須整格相同（寬鬆比對），不做模糊比對 |
 | `type` | `text`（預設）、`number`、`integer`、`date` |
 | `required` | `true` 時：表頭找不到就無法執行；資料空白會標「需檢查」 |
-| `text` | 文字清理，依序套用：`trim`、`upper`、`lower`、`halfwidth`（全形轉半形）、`collapse_space`、`no_space`、`digits_only`、`alnum_only`。預設 `[trim, collapse_space]` |
+| `text` | 文字清理，依序套用：`trim`、`upper`、`lower`、`halfwidth`（全形轉半形）、`collapse_space`（每行的連續空白合成一個，保留換行）、`single_line`（多行合成一行）、`no_space`、`digits_only`、`alnum_only`。預設 `[trim, collapse_space]`，儲存格裡的換行會保留 |
 | `replace` | 正規表達式取代，`[[pattern, 取代文字], ...]`，在轉型或清理前套用 |
 | `strip` | number／integer 用，解析前去掉的單位文字，例如 `[KG, 箱]` |
 | `decimal` | number／integer 用，小數點符號。`"."`（預設，1,000.02）或 `","`（歐洲寫法 1.000,02）。千分位一定要三位一組，對不上就標記，不會讀成錯的數字 |

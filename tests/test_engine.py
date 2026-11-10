@@ -303,7 +303,7 @@ def test_confirmed_match_leaves_todo_and_validate_card_counts_dismissed(env):
     assert row["status"] == "confirmed"                           # 確認後不再算待處理
     assert result["matches"][0]["counts"]["review"] == 0
     validate = next(s for s in result["stages"] if s["id"] == "validate")
-    assert validate["status"] == "ok" and validate["summary"] == "已全部確認"
+    assert validate["status"] == "confirmed" and validate["summary"] == "已確認 1 列"
     assert validate["checks"][0]["done"] == validate["checks"][0]["rows"] == 1
 
 
@@ -314,3 +314,20 @@ def test_same_right_row_assigned_twice_is_flagged(env):
     review.save()
     result, _, _ = env()
     assert any(i["code"] == "manual_shared" and i["rid"] == "invoice:13" for i in result["issues"])
+
+
+def test_stage_cards_follow_the_same_rule_as_tabs(env):
+    result, review, _ = env()
+    match = result["matches"][0]
+    todo = [r["left"] for r in match["rows"] if r["open"]]
+    stage = next(s for s in result["stages"] if s["id"] == "match")
+    assert stage["summary"] == f"{len(todo)} 列待處理" and match["counts"]["todo"] == len(todo)
+    first = todo[0]                                                  # 只確認一列，卡片仍是待處理，數字少一
+    key = next(i["key"] for i in result["issues"] if i["rid"] == first and i["stage"] == "match")
+    review.set_dismissed(key, True)
+    review.save()
+    result, _, _ = env()
+    stage = next(s for s in result["stages"] if s["id"] == "match")
+    assert stage["status"] == "review" and stage["summary"] == f"{len(todo) - 1} 列待處理"
+    row = next(r for r in result["matches"][0]["rows"] if r["left"] == first)
+    assert row["acknowledged"] and not row["open"]

@@ -95,12 +95,12 @@ const state = {
   recipes: [], recipeId: null, workbook: null, result: null,
   tab: "rows", filter: "review", search: "", selected: null, stageOpen: null,
   matchName: null, matchFilter: "todo", matchSearch: "", pickerFor: null, matchFocus: null, matchAll: false,
-  issueFilter: "review", issueCode: null, checked: new Set(),
+  issueFilter: "review", issueFocus: null, checked: new Set(),   // issueFocus：只看某一類警示 {stage, code, label}
   traces: {}, openTrace: new Set(),   // 執行紀錄：好奇時才向程式要，要過的先記著
 };
 const LEVEL_TEXT = { review: "需檢查", notice: "提示", error: "無法執行" };
 const STAGE_TEXT = { load: "Load", gate: "Gate", normalize: "Normalize", match: "Match", transform: "Transform", validate: "Validate", mapping: "Mapping", export: "Export" };
-const MATCH_TEXT = { auto: ["已配對", "ok"], review: ["待確認", "review"], confirmed: ["已確認", "ok"], manual: ["人工指定", "manual"], none: ["確認沒有", "manual"], ambiguous: ["待選擇", "review"], unmatched: ["找不到", "missing"] };
+const MATCH_TEXT = { auto: ["已配對", "ok"], review: ["待確認", "review"], confirmed: ["已確認", "manual"], manual: ["人工指定", "manual"], none: ["確認沒有", "manual"], ambiguous: ["待選擇", "review"], unmatched: ["找不到", "missing"] };
 
 /* 畫面偏好（顯示哪些欄位、緊湊或寬鬆）只存在這台電腦的瀏覽器，存不了也不影響使用 */
 const prefs = {
@@ -311,7 +311,7 @@ function setResult(result, fresh = false) {
   const status = $("runStatus");
   status.hidden = false;
   put(status, el("span", { class: `dot ${result.status}` }),
-    { ok: "全部正常", review: `${result.counts.review} 個地方需檢查`, error: "無法執行" }[result.status]);
+    { ok: "全部正常", review: `${result.counts.review} 個地方需檢查`, error: "無法執行" }[result.status] || "全部正常");
   $("exportButton").href = `/api/runs/${result.run_id}/export`;
   $("exportButton").toggleAttribute("hidden", result.status === "error");
   renderPipeline();
@@ -331,17 +331,54 @@ function renderPipeline() {
     el("span", { class: "summary", text: stage.summary || (stage.status === "skip" ? "未執行" : "") })))));
   const detail = $("stageDetail");
   detail.hidden = !open;
-  if (open && open.checks) {   /* 驗證：每條規則可以直接跳到它標記的列 */
+  if (open) {
     put(detail, el("h3", { text: open.label }),
-      el("ul", {}, open.checks.map((check) => el("li", {},
-        `${check.message}：${check.rows} 列`, check.done ? el("span", { class: "muted", text: `（已確認 ${check.done}）` }) : null,
-        check.rows ? el("button", { type: "button", class: "link", style: "margin-left:10px", text: "查看",
-          onclick: () => { Object.assign(state, { tab: "issues", issueFilter: "all", issueCode: check.code }); renderTabs(); } }) : null))));
-  } else if (open) {
-    put(detail, el("h3", { text: open.label }),
-      el("ul", {}, open.lines.length ? open.lines.map((line) => el("li", { class: line.startsWith("　") ? "sub" : null, text: line.trim() }))
-        : el("li", { class: "muted", text: "沒有細節" })));
+      open.checks || (open.groups && open.groups.length) ? null : el("ul", {}, open.lines.length ? open.lines.map((line) => el("li", { class: line.startsWith("　") ? "sub" : null, text: line.trim() }))
+        : el("li", { class: "muted", text: "沒有細節" })),
+      stageLinks(open));
   }
+}
+
+/* 每張卡片都可以直接跳到相關的列：卡片上的數字和點進去看到的是同一批 */
+function stageLinks(stage) {
+  const r = state.result;
+  const go = (changes) => () => { Object.assign(state, { issueFocus: null }, changes); renderTabs(); };
+  const issuesOf = (test) => activeIssues().filter(test);
+  const items = [];
+  const link = (text, extra, onclick) => el("li", {}, text, extra ? el("span", { class: "muted", text: extra }) : null,
+    onclick ? el("button", { type: "button", class: "link", style: "margin-left:10px", text: "查看", onclick }) : null);
+  if (stage.id === "load") {
+    const notes = issuesOf((i) => i.stage === "load");
+    if (notes.length) items.push(link(`讀取時的提醒 ${notes.length} 則`, null, go({ tab: "issues", issueFilter: "all", issueFocus: { stage: "load", label: "讀取時的提醒" } })));
+  } else if (stage.id === "gate") {
+    if (r.excluded.length) items.push(link(`排除 ${r.excluded.length} 列`, null, go({ tab: "excluded" })));
+  } else if (stage.id === "normalize") {
+    for (const g of stage.groups || []) {
+      items.push(link(`${g.label} ${g.open + g.done} 格`, g.done ? `（已確認 ${g.done}）` : null,
+        go({ tab: "issues", issueFilter: "all", issueFocus: { stage: "normalize", code: g.code, label: g.label } })));
+    }
+  } else if (stage.id === "match") {
+    for (const m of r.matches) {
+      items.push(link(`${m.label}：${m.counts.todo} 列待處理`, null,
+        go({ tab: "match", matchName: m.name, matchFilter: m.counts.todo ? "todo" : "all", matchFocus: null })));
+    }
+  } else if (stage.id === "validate") {
+    for (const check of stage.checks || []) {
+      items.push(link(`${check.message}：${check.rows} 列`, check.done ? `（已確認 ${check.done}）` : null,
+        check.rows ? go({ tab: "issues", issueFilter: "all", issueFocus: { code: check.code, label: check.message } }) : null));
+    }
+  } else if (stage.id === "mapping") {
+    const pending = r.unmapped.filter((u) => u.missing === "ask").length;
+    if (r.mappings.length) items.push(link(`待補對照 ${pending} 種寫法`, null, go({ tab: "mapping" })));
+    const edited = r.output.rows.filter((x) => Object.keys(x.edited).length).length;
+    if (edited) items.push(link(`人工修改 ${edited} 列`, null, go({ tab: "rows", filter: "confirmed" })));
+  } else if (stage.id === "export") {
+    const review = r.output.rows.filter((x) => x.status === "review").length;
+    const done = r.output.rows.filter((x) => x.status === "confirmed").length;
+    items.push(link(`需檢查 ${review} 列`, null, review ? go({ tab: "rows", filter: "review" }) : null));
+    if (done) items.push(link(`已確認 ${done} 列`, null, go({ tab: "rows", filter: "confirmed" })));
+  }
+  return items.length ? el("ul", { class: "stage-links" }, items) : null;
 }
 
 function activeIssues() { return state.result.issues.filter((i) => i.level !== "skip"); }
@@ -349,7 +386,7 @@ function activeIssues() { return state.result.issues.filter((i) => i.level !== "
 function renderTabs() {
   const r = state.result;
   const pendingMaps = r.unmapped.filter((u) => u.missing === "ask").length;
-  const todo = r.matches.reduce((n, m) => n + m.counts.ambiguous + m.counts.unmatched + m.counts.review, 0);
+  const todo = r.matches.reduce((n, m) => n + (m.counts.todo || 0), 0);
   const open = activeIssues().filter((i) => !i.dismissed && i.level !== "notice").length;
   const tabs = [
     ["rows", "結果", r.output.rows.filter((x) => x.status === "review").length],
@@ -360,7 +397,7 @@ function renderTabs() {
   ].filter(Boolean);
   if (!tabs.some((t) => t[0] === state.tab)) state.tab = "rows";
   put($("tabs"), tabs.map(([id, label, n, plain]) => el("button", {
-    type: "button", class: `tab${state.tab === id ? " active" : ""}`, onclick: () => { state.tab = id; state.issueCode = null; renderTabs(); },
+    type: "button", class: `tab${state.tab === id ? " active" : ""}`, onclick: () => { state.tab = id; state.issueFocus = null; renderTabs(); },
   }, label, n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)));
   ({ rows: renderRows, match: renderMatch, mapping: renderMapping, excluded: renderExcluded, issues: renderIssues })[state.tab]();
   renderDrawer();
@@ -429,10 +466,11 @@ function renderRows(keepMenu = false) {
   if (r.status === "error") { renderIssues(); return; }
   const columns = visibleColumns();
   const dense = prefs.get("dense", false);
-  const filters = { all: () => true, review: (x) => x.status === "review", edited: (x) => Object.keys(x.edited).length };
+  const wrap = prefs.get("wrap", false);   // 多行儲存格：換行顯示（最多幾行，超過收起）或壓成一行
+  const filters = { all: () => true, review: (x) => x.status === "review", confirmed: (x) => x.status === "confirmed" };
   const rows = r.output.rows.filter(filters[state.filter]).filter((x) => rowMatches(x, state.search));
   const menuWasOpen = keepMenu && document.querySelector(".menu")?.open;
-  const table = el("table", { class: `grid${dense ? " dense" : ""}` },
+  const table = el("table", { class: `grid${dense ? " dense" : ""}${wrap ? " wrap" : ""}` },
     el("thead", {}, el("tr", {}, el("th", { class: "status-col" }), el("th", { text: "列" }), columns.map((c) => el("th", { text: c.name, title: c.name })))),
     el("tbody", {}, rows.slice(0, 2000).map((row) => el("tr", {
       class: state.selected === row.rid ? "selected" : null,
@@ -442,26 +480,31 @@ function renderRows(keepMenu = false) {
     el("td", { class: "rowno", text: row.row ?? "", title: row.sheet ? `${row.sheet}・第 ${row.row} 列` : null }),
     columns.map((c) => {
       const flags = cellIssues(row, c.name);
+      const settled = row.issues.some((i) => state.result.issues[i].dismissed && state.result.issues[i].out_columns.includes(c.name));
       const value = row.values[c.name];
       const raw = row.raw[c.name];
       const classes = [c.type === "number" || c.type === "integer" ? "num" : "",
         flags.some((i) => i.level === "review") ? "cell-review" : flags.length ? "cell-notice" : "",
-        c.name in row.edited ? "cell-edited" : ""].filter(Boolean).join(" ");
-      const text = (value === null || value === undefined || value === "") && raw ? raw : fmt(value, c.type);
+        c.name in row.edited ? "cell-edited" : !flags.length && settled ? "cell-confirmed" : ""].filter(Boolean).join(" ");
+      const isRaw = (value === null || value === undefined || value === "") && raw;
+      const text = isRaw ? raw : fmt(value, c.type);
       const tips = [text, ...flags.map((i) => i.message)];
       if (c.name in row.edited) tips.push(`人工修改，原值：${row.edited[c.name] ?? "（空白）"}`);
+      const shown = wrap ? text : String(text).replace(/\n+/g, " ↵ ");
       return el("td", { class: classes || null, title: tips.filter(Boolean).join("\n") || null },
-        (value === null || value === undefined || value === "") && raw ? el("span", { class: "raw", text: raw }) : text);
+        el("div", { class: `cell-text${isRaw ? " raw" : ""}`, text: shown }));
     })))));
   const menu = columnMenu();
   if (menuWasOpen) menu.open = true;
   put($("tabBody"),
     el("div", { class: "toolbar" },
-      chips([["review", "需檢查"], ["all", "全部"], ["edited", "已修改"]], state.filter, (id) => { state.filter = id; renderTabs(); }),
+      chips([["review", "需檢查"], ["confirmed", "已確認"], ["all", "全部"]], state.filter, (id) => { state.filter = id; renderTabs(); }),
       searchBox(state.search, "搜尋", (v) => { state.search = v; renderRows(); }),
       el("span", { class: "spacer" }),
       el("span", { class: "muted", text: `${rows.length} 列` }),
       menu,
+      el("button", { type: "button", class: "ghost small", text: wrap ? "壓成一行" : "顯示換行", title: "儲存格有多行時，要不要換行顯示",
+        onclick: () => { prefs.set("wrap", !wrap); renderRows(); } }),
       el("button", { type: "button", class: "ghost small", text: dense ? "寬鬆" : "緊湊", title: "切換表格密度",
         onclick: () => { prefs.set("dense", !dense); renderRows(); } })),
     rows.length ? el("div", { class: "table-wrap" }, table)
@@ -499,9 +542,19 @@ function renderDrawer() {
     ? `${row.sheet}・第 ${row.row ?? "?"} 列` : `第 ${row.row ?? "?"} 列`;
   const issues = row.issues.map((i) => r.issues[i]).filter((i) => i.level !== "skip");
   const fields = r.output.columns.map((c) => {
-    const input = el("input", { value: row.values[c.name] ?? "", disabled: !c.editable, placeholder: row.raw[c.name] ? `原始：${row.raw[c.name]}` : "" });
+    /* 文字欄位用會自動長高的文字框，多行內容不會被截掉；Enter 儲存，Shift+Enter 換行 */
+    const multiline = c.type === "text";
+    const input = multiline
+      ? el("textarea", { rows: 1, disabled: !c.editable, placeholder: row.raw[c.name] ? `原始：${row.raw[c.name]}` : "" })
+      : el("input", { value: row.values[c.name] ?? "", disabled: !c.editable, placeholder: row.raw[c.name] ? `原始：${row.raw[c.name]}` : "" });
+    if (multiline) {
+      input.value = row.values[c.name] ?? "";
+      const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 220)}px`; };
+      input.addEventListener("input", grow);
+      requestAnimationFrame(grow);
+    }
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") input.blur();
+      if (e.key === "Enter" && !(multiline && e.shiftKey)) { e.preventDefault(); input.blur(); }
       if (e.key === "Escape") { input.value = row.values[c.name] ?? ""; input.blur(); }
     });
     input.addEventListener("change", () => {
@@ -530,7 +583,7 @@ function renderDrawer() {
   });
   put($("drawerBody"),
     issues.length ? el("section", {}, el("h4", { class: "section-title", text: "需要注意" }), el("div", { class: "list" }, issues.map((i) => issueLine(i)))) : null,
-    el("section", {}, el("h4", { class: "section-title", text: "欄位" }), el("p", { class: "muted small-text", style: "margin:-4px 0 10px", text: "修改後按 Enter，會保留原值。" }), fields),
+    el("section", {}, el("h4", { class: "section-title", text: "欄位" }), el("p", { class: "muted small-text", style: "margin:-4px 0 10px", text: "修改後按 Enter 儲存（Shift+Enter 換行），會保留原值。" }), fields),
     el("section", {}, rowStory),
     el("section", {}, el("h4", { class: "section-title", text: "來源" }),
       el("dl", { class: "kv" }, row.sheet ? [el("dt", { text: "工作表" }), el("dd", { text: row.sheet })] : null,
@@ -614,7 +667,7 @@ function renderMatch() {
   const match = r.matches.find((m) => m.name === state.matchName) || r.matches[0];
   state.matchName = match.name;
   const todo = new Set(["ambiguous", "unmatched", "review"]);   // 已確認（confirmed）不算待處理
-  const filters = { todo: (x) => todo.has(x.status), all: () => true, manual: (x) => x.status === "manual" || x.status === "none" };
+  const filters = { todo: (x) => x.open, all: () => true, manual: (x) => ["manual", "none", "confirmed"].includes(x.status) || x.acknowledged };
   const needle = state.matchSearch.toLowerCase();
   let rows = match.rows.filter(filters[state.matchFilter]);
   if (state.matchFocus) rows = rows.filter((x) => x.left === state.matchFocus);
@@ -627,7 +680,8 @@ function renderMatch() {
     r.matches.length > 1 ? el("div", { class: "toolbar" }, chips(r.matches.map((m) => [m.name, m.label]), match.name,
       (id) => { Object.assign(state, { matchName: id, matchFocus: null, pickerFor: null }); renderTabs(); })) : null,
     el("div", { class: "toolbar" },
-      chips([["todo", `需處理 ${c.ambiguous + c.unmatched + c.review}`], ["all", `全部 ${match.rows.length}`], ["manual", `人工 ${c.manual + c.none}`]],
+      chips([["todo", `需處理 ${c.todo}`], ["all", `全部 ${match.rows.length}`],
+        ["manual", `已確認 ${match.rows.filter((x) => ["manual", "none", "confirmed"].includes(x.status) || x.acknowledged).length}`]],
         state.matchFilter, (id) => { Object.assign(state, { matchFilter: id, matchFocus: null }); renderTabs(); }),
       searchBox(state.matchSearch, "搜尋", (v) => { state.matchSearch = v; renderMatch(); }),
       state.matchFocus ? el("button", { type: "button", class: "ghost small", text: "顯示全部", onclick: () => { state.matchFocus = null; renderTabs(); } }) : null,
@@ -649,7 +703,10 @@ function renderMatch() {
 
 function matchCard(match, row) {
   const left = match.left_rows[row.left];
-  const [label, tone] = MATCH_TEXT[row.status];
+  let [label, tone] = MATCH_TEXT[row.status];
+  if (row.acknowledged && ["review", "ambiguous", "unmatched"].includes(row.status)) {
+    [label, tone] = [`${label}・已確認`, "manual"];   // 問題還在，但你已經確認過
+  }
   const decide = (rights) => { state.pickerFor = null; return act("match", { match: match.name, left: row.left, rights }); };
   const reviewIssue = state.result.issues.find((i) => i.code === "match_review" && i.rid === row.left && i.ref === match.name);
   const leftColumns = pickColumns(left.values, match.show.left).filter((k) => !match.left_title.includes(k));
@@ -796,8 +853,9 @@ function renderIssues() {
     review: (i) => !i.dismissed && (i.level === "review" || i.level === "error"), notice: (i) => !i.dismissed && i.level === "notice",
     dismissed: (i) => i.dismissed, all: () => true,
   };
-  const issues = activeIssues().filter(filters[state.issueFilter]).filter((i) => !state.issueCode || i.code === state.issueCode);
-  const only = state.issueCode && activeIssues().find((i) => i.code === state.issueCode);
+  const focus = state.issueFocus;
+  const issues = activeIssues().filter(filters[state.issueFilter])
+    .filter((i) => !focus || ((!focus.code || i.code === focus.code) && (!focus.stage || i.stage === focus.stage)));
   const rowOf = new Map();
   state.result.output.rows.forEach((row) => row.issues.forEach((i) => rowOf.set(i, row)));
   const selectable = issues.filter((i) => i.level !== "error");
@@ -805,9 +863,9 @@ function renderIssues() {
     el("div", { class: "toolbar" },
       chips([["review", "需檢查"], ["notice", "提示"], ["dismissed", "已確認"], ["all", "全部"]], state.issueFilter,
         (id) => { state.issueFilter = id; state.checked.clear(); renderTabs(); }),
-      only ? el("span", { class: "badge manual" }, `只看：${only.message}`,
+      focus ? el("span", { class: "badge manual" }, `只看：${focus.label}`,
         el("button", { type: "button", class: "link", style: "margin-left:6px", text: "✕", title: "顯示全部",
-          onclick: () => { state.issueCode = null; renderTabs(); } })) : null,
+          onclick: () => { state.issueFocus = null; renderTabs(); } })) : null,
       el("span", { class: "spacer" }),
       selectable.length ? el("button", { type: "button", class: "ghost small", text: "全選", onclick: () => { selectable.forEach((i) => state.checked.add(i.key)); renderTabs(); } }) : null,
       state.checked.size ? el("button", {

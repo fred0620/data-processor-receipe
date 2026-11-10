@@ -22,12 +22,23 @@ def key(text: object) -> str:
     return _KEY_DROP.sub("", halfwidth(str(text)).casefold())
 
 
+_INLINE_SPACE = re.compile(r"[^\S\n]+")   # 換行以外的空白
+
+
+def _collapse_space(text: str) -> str:
+    """每一行裡的連續空白合成一個、去掉行首行尾空白；保留換行，連續空行只留一行。"""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [_INLINE_SPACE.sub(" ", line).strip() for line in text.split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
+
+
 TEXT_OPS = {
     "trim": lambda s: s.strip(),
     "upper": lambda s: s.upper(),
     "lower": lambda s: s.lower(),
     "halfwidth": halfwidth,
-    "collapse_space": lambda s: _SPACE.sub(" ", s),
+    "collapse_space": _collapse_space,
+    "single_line": lambda s: _SPACE.sub(" ", s).strip(),
     "no_space": lambda s: _SPACE.sub("", s),
     "digits_only": lambda s: re.sub(r"\D", "", s),
     "alnum_only": lambda s: re.sub(r"[\W_]", "", s, flags=re.UNICODE),

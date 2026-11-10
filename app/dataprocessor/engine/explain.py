@@ -12,7 +12,7 @@ from .textnorm import TEXT_OPS  # noqa: F401  確保 TEXT_LABELS 與實際支援
 
 TEXT_LABELS = {
     "trim": "去掉前後空白", "upper": "轉大寫", "lower": "轉小寫", "halfwidth": "全形轉半形",
-    "collapse_space": "連續空白合成一個", "no_space": "去掉所有空白", "digits_only": "只留數字",
+    "collapse_space": "連續空白合成一個（保留換行）", "single_line": "合成一行", "no_space": "去掉所有空白", "digits_only": "只留數字",
     "alnum_only": "只留文字與數字",
 }
 TYPE_LABELS = {"text": "文字", "number": "數字", "integer": "整數", "date": "日期"}

@@ -168,6 +168,7 @@ button:disabled { opacity: .45; cursor: default; }
 .stage .label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
 .stage .summary { font-size: 12.5px; font-weight: 400; color: var(--text); line-height: 1.4; }
 .stage.review .summary { color: var(--warning-text); }
+.stage.confirmed .summary { color: var(--accent-text); }
 .stage.error { background: var(--danger-soft); }
 .stage.error .summary { color: var(--danger-text); }
 .stage.skip { opacity: .5; }
@@ -178,11 +179,14 @@ button:disabled { opacity: .45; cursor: default; }
 .stage-detail h3 { margin-bottom: 6px; font-size: 12.5px; font-weight: 600; }
 .stage-detail ul { margin: 0; padding: 0; list-style: none; font-size: 13px; line-height: 1.8; }
 .stage-detail li.sub { padding-left: 16px; color: var(--text); }
+.stage-links { margin-top: 8px !important; padding-top: 8px !important; border-top: 1px solid var(--line); }
+.stage-detail h3 + .stage-links { margin-top: 0 !important; padding-top: 0 !important; border-top: 0; }
 .dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ink-5); }
 .dot.ok { background: var(--success); }
 .dot.review { background: var(--warning); }
 .dot.notice { background: var(--icon); }
 .dot.error { background: var(--danger); }
+.dot.confirmed { background: var(--accent); }
 
 /* ---------- 分頁 ---------- */
 .tabs { display: flex; gap: 22px; margin: 24px 0 16px; border-bottom: 1px solid var(--ink-3); }
@@ -243,8 +247,13 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .grid tr.selected td { background: var(--accent-soft); }
 .grid td.cell-review, .grid tr:hover td.cell-review { background: var(--warning-soft); }
 .grid td.cell-notice { background: var(--ink-1); }
-.grid td.cell-edited, .grid tr:hover td.cell-edited { background: var(--success-soft); }
+.grid td.cell-edited, .grid tr:hover td.cell-edited { background: var(--accent-soft); }
+.grid td.cell-confirmed, .grid tr:hover td.cell-confirmed { background: rgba(59, 130, 246, 0.06); }
 .grid .raw { color: var(--warning-text); font-style: italic; }
+.grid .cell-text { overflow: hidden; text-overflow: ellipsis; }
+.grid.wrap td { white-space: normal; vertical-align: top; max-width: 280px; }
+.grid.wrap .cell-text { white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.grid.wrap td.num .cell-text { display: block; }
 .grid .rowno { color: var(--text-faint); font-family: var(--mono); font-size: 12px; }
 
 .menu { position: relative; }
@@ -274,7 +283,8 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .issue.review { background: var(--surface); }
 .drawer .issue { background: var(--canvas); box-shadow: none; }
 .issue.error { background: var(--danger-soft); color: var(--danger-text); box-shadow: none; }
-.issue.dismissed { color: var(--text); }
+.issue.dismissed { background: rgba(59, 130, 246, 0.06); box-shadow: none; color: var(--text); }
+.issue.dismissed .dot { background: var(--accent); }
 .issue .dot { margin-top: 7px; }
 .issue .body { flex: 1; min-width: 0; }
 .issue .message { overflow-wrap: anywhere; }
@@ -283,8 +293,16 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .issue-list { display: flex; flex-direction: column; gap: 6px; }
 .issue-row { display: flex; gap: 10px; align-items: flex-start; }
 .drawer-body section .list { gap: 6px; }
-.field { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 4px 10px; align-items: center; margin-bottom: 8px; }
+.field { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 4px 10px; align-items: start; margin-bottom: 8px; }
+.field .field-label { padding-top: 8px; }
 .field label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 500; color: var(--text); }
+.field textarea {
+  width: 100%; min-height: var(--control); padding: 7px 11px; background: var(--surface); border: 0; resize: none; overflow: auto;
+  border-radius: var(--radius-md); box-shadow: inset 0 0 0 1px var(--ink-4); font-size: 13px; line-height: 1.45;
+}
+.field textarea:disabled { background: var(--canvas); color: var(--text); }
+.field textarea:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-soft); }
+.field.flag-review textarea { background: var(--warning-soft); box-shadow: inset 0 0 0 1px var(--warning); }
 .field input {
   width: 100%; height: var(--control); padding: 0 11px; background: var(--surface); border: 0;
   border-radius: var(--radius-md); box-shadow: inset 0 0 0 1px var(--ink-4); font-size: 13px; transition: box-shadow .2s ease;
@@ -309,7 +327,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .row-trace .trace { margin-top: 8px; }
 .kv { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 2px 10px; margin: 0; font-size: 12.5px; }
 .kv dt { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kv dd { margin: 0; overflow-wrap: anywhere; }
+.kv dd { margin: 0; overflow-wrap: anywhere; white-space: pre-line; max-height: 9.6em; overflow: auto; }
 
 /* ---------- 配對 ---------- */
 .match-meta { margin: -2px 0 14px; font-size: 12.5px; }
