@@ -288,6 +288,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .issue .dot { margin-top: 7px; }
 .issue .body { flex: 1; min-width: 0; }
 .issue .message { overflow-wrap: anywhere; }
+.issue .resolution { margin-top: 2px; color: var(--accent); overflow-wrap: anywhere; white-space: pre-line; }
 .issue-actions { display: flex; align-items: center; gap: 14px; margin-top: 3px; flex-wrap: wrap; }
 .issue .meta { font-size: 12px; color: var(--text); }
 .issue-list { display: flex; flex-direction: column; gap: 6px; }

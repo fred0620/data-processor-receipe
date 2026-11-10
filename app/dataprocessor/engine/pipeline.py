@@ -41,6 +41,8 @@ class Issue:
     out_columns: list[str] = field(default_factory=list)  # 標在哪些輸出欄位
     dismissed: bool = False
     ref: str | None = None           # 相關的配對名稱，介面用來跳到配對畫面
+    resolved: str | None = None      # 人工處理的方式：edited（修改）、mapped（補對照）、matched（指定配對）
+    note: str | None = None          # 怎麼處理的，留在畫面上當紀錄
 
     @property
     def key(self) -> str:
@@ -49,7 +51,8 @@ class Issue:
     def to_json(self, index: int) -> dict:
         return {"id": index, "key": self.key, "level": self.level, "stage": self.stage, "code": self.code,
                 "message": self.message, "rid": self.rid, "table": self.table, "column": self.column,
-                "out_columns": self.out_columns, "dismissed": self.dismissed, "ref": self.ref}
+                "out_columns": self.out_columns, "dismissed": self.dismissed, "ref": self.ref,
+                "resolved": self.resolved, "note": self.note}
 
 
 class Mapper:
@@ -80,6 +83,9 @@ class Mapper:
     def origin(self, name: str, value: str) -> str:
         """這個對照是 recipe 寫好的，還是使用者在畫面上補的。"""
         return "你在畫面上補的對照" if key(value) in self.added.get(name, {}) else "recipe 裡的對照"
+
+    def is_added(self, name: str, value: str) -> bool:
+        return key(value) in self.added.get(name, {})
 
     def lookup(self, name: str, value: str, place: str) -> str | None:
         spec: Mapping = self.specs[name]
@@ -232,12 +238,13 @@ class _Run:
                         if name in self.upstream.get(rid, {}):
                             out_name, change = self.upstream[rid][name]
                             now = _display(row[name]) if row[name] is not None else _display(raw.get(name))
-                            del pending[before:]          # 人工修正過的格子，不再提醒解析或對照問題
+                            value = change.get("value")
+                            for issue in pending[before:]:  # 人工修正過的格子：問題留著當紀錄，標成已處理
+                                issue.resolved, issue.note = "edited", f"已人工修改為「{_short(_display(value))}」"
                             if now != _display(change.get("original")):
                                 pending.append(Issue("review", "normalize", "edit_stale",
                                                      f"{out_name} 人工修改後，原始值已變更（原本「{_display(change.get('original'))}」，"
                                                      f"現在「{now}」）", rid=rid, table=spec.name, column=name))
-                            value = change.get("value")
                             row[name] = None if value == "" else value
                             self.applied[(rid, out_name)] = change.get("original")
                     rows.append(row)
@@ -305,6 +312,10 @@ class _Run:
                                  + {"ask": "留空，等你補對照", "keep": "保留原值", "blank": "留空"}[self.recipe.mappings[column.map].missing])
                     return kept
                 trail.append(f"查對照表 {column.map}：「{_short(value)}」→ {mapped}（{self.mapper.origin(column.map, value)}）")
+                if self.mapper.is_added(column.map, value):   # 原本不在對照表，是使用者補的：留下紀錄
+                    pending.append(Issue("review", "normalize", "unmapped", f"「{value}」不在對照表 {column.map}，請補上對照",
+                                         rid=rid, table=table, column=column.name, resolved="mapped",
+                                         note=f"已補對照 → {mapped}"))
                 value = mapped
             return value
         kind = {"number": "數字", "integer": "整數", "date": "日期"}[column.type]
@@ -402,6 +413,9 @@ class _Run:
                                          + ("，改回自動比對" if not chosen else ""), rid=left_rid, table=spec.left, ref=spec.name))
                 if not chosen:
                     continue
+            self.issues.append(Issue("review", "match", "match_manual", f"{label}：人工指定配對",
+                                     rid=left_rid, table=spec.left, ref=spec.name, resolved="matched",
+                                     note="人工指定為沒有配對" if not chosen else f"人工指定配給 {'、'.join(chosen)}"))
             if not chosen:
                 decided[left_rid] = {"status": "none", "rights": [], "how": "人工：沒有配對", "candidates": []}
             else:
@@ -698,8 +712,12 @@ class _Run:
                 record["values"][name] = change.get("value")
                 record["edited"][name] = change.get("original")
                 record["raw"].pop(name, None)
-            # 人工改過的格子，不再提醒這格的解析或對照問題
-            self.issues.extend(i for i in cell_issues if not set(i.out_columns) & set(record["edited"]))
+            # 人工改過的格子：這格的解析或對照問題留著當紀錄，標成已處理
+            for issue in cell_issues:
+                if set(issue.out_columns) & set(record["edited"]) and issue.resolved is None:
+                    value = record["values"].get(issue.out_columns[0])
+                    issue.resolved, issue.note = "edited", f"已人工修改為「{_short(_display(value))}」"
+            self.issues.extend(cell_issues)
             out_rows.append(record)
             for column in rid_columns:
                 for linked in str(own.get(column) or "").split(","):   # 彙總時是逗號分隔的多個列代號
@@ -710,22 +728,21 @@ class _Run:
 
         dismissed = set(self.review.data["dismissed"])
         for issue in self.issues:
-            issue.dismissed = issue.key in dismissed
+            issue.dismissed = issue.resolved is not None or issue.key in dismissed
         for number, issue in enumerate(self.issues):
             for row_index, translate in index.get(issue.rid or "", []):
                 record = out_rows[row_index]
                 if issue.column and issue.stage == "normalize" and issue.column in translate:
                     target = translate[issue.column]
-                    if target in record["edited"] and issue.code != "edit_stale":
-                        continue  # 這格已經人工修正
                     issue.out_columns = [target]
                     raw = self.raw.get(issue.table or "", {}).get(issue.rid, {}).get(issue.column)
-                    if issue.code in ("parse", "unmapped") and raw is not None and record["values"].get(target) is None:
+                    if issue.code in ("parse", "unmapped") and not issue.resolved and raw is not None \
+                            and record["values"].get(target) is None:
                         record["raw"][target] = raw
                 record["issues"].append(number)
         for record in out_rows:  # 同一格已經有解析或對照問題時，不再重複提醒「必填空白」
             explained = {c for i in record["issues"] for c in self.issues[i].out_columns
-                         if self.issues[i].code in ("parse", "unmapped")}
+                         if self.issues[i].code in ("parse", "unmapped") and not self.issues[i].resolved}
             for i in record["issues"]:
                 issue = self.issues[i]
                 if issue.code == "required" and issue.stage == "mapping" and set(issue.out_columns) <= explained:
@@ -791,6 +808,9 @@ class _Run:
                     return None
                 record["raw"].pop(column.name, None)
                 return kept
+            if self.mapper.is_added(column.map, text):
+                issues.append(Issue("review", "mapping", "unmapped", f"「{text}」不在對照表 {column.map}，請補上對照",
+                                    rid=rid, out_columns=[column.name], resolved="mapped", note=f"已補對照 → {mapped}"))
             return mapped
         return text
 
@@ -818,7 +838,7 @@ class _Run:
         stage = self.stages["normalize"]
         if stage["status"] != "error":
             stage["status"] = status(len(open_), len(done))
-            stage["summary"] = (f"{len(open_)} 格待處理" if open_ else f"已確認 {len(done)} 格" if done else "完成")
+            stage["summary"] = (f"{len(open_)} 格待處理" if open_ else f"已處理 {len(done)} 格" if done else "完成")
             stage["groups"] = _groups(open_ + done, "normalize")
 
         # Match：以列為單位，還有未確認警示的列才算需處理
@@ -841,7 +861,7 @@ class _Run:
             stage = self.stages["match"]
             if stage["status"] != "error":
                 stage["status"] = status(todo_total, len(done))
-                stage["summary"] = f"{todo_total} 列待處理" if todo_total else ("已全部確認" if done else "全部完成")
+                stage["summary"] = f"{todo_total} 列待處理" if todo_total else ("已全部處理" if done else "全部完成")
 
         # Validate：每條規則各自計算
         if self.check_info:
@@ -868,7 +888,7 @@ class _Run:
         if self.recipe.mappings or open_ or done:
             stage["lines"].append(f"待補對照 {pending} 格" if pending else "所有值都有對照")
             stage["status"] = status(len(open_), len(done))
-            stage["summary"] = (f"待補 {len(open_)} 格" if open_ else f"已確認 {len(done)} 格" if done
+            stage["summary"] = (f"待補 {len(open_)} 格" if open_ else f"已處理 {len(done)} 格" if done
                                 else "完成" if self.recipe.mappings else "沒有問題")
 
         # Export：以輸出的列為單位

@@ -99,6 +99,9 @@ const state = {
   traces: {}, openTrace: new Set(),   // 執行紀錄：好奇時才向程式要，要過的先記著
 };
 const LEVEL_TEXT = { review: "需檢查", notice: "提示", error: "無法執行" };
+/* 警示被處理的方式：留在畫面上當紀錄，不會直接消失 */
+const RESOLVED_TEXT = { edited: "已人工修改", mapped: "已補對照", matched: "已人工配對" };
+const handledText = (issue) => RESOLVED_TEXT[issue.resolved] || "已確認";
 const STAGE_TEXT = { load: "Load", gate: "Gate", normalize: "Normalize", match: "Match", transform: "Transform", validate: "Validate", mapping: "Mapping", export: "Export" };
 const MATCH_TEXT = { auto: ["已配對", "ok"], review: ["待確認", "review"], confirmed: ["已確認", "manual"], manual: ["人工指定", "manual"], none: ["確認沒有", "manual"], ambiguous: ["待選擇", "review"], unmatched: ["找不到", "missing"] };
 
@@ -213,8 +216,11 @@ function editRecipe(text = "") {
     try {
       const data = await post("/api/recipes", { text: area.value });
       closeDialog();
-      toast(`已儲存「${data.name}」`);
       await loadRecipes(data.id);
+      /* 正在看的結果用的就是這份 recipe：直接用新版重新處理，人工修改與確認都會保留 */
+      if (state.result && state.result.recipe.id === data.id && await act("rerun")) {
+        toast(`已儲存「${data.name}」，並用新版重新處理目前的檔案`);
+      } else toast(`已儲存「${data.name}」`);
     } catch (error) { editStep(); showProblems(error); }
   };
   /* 第二步：先看白話說明，確認邏輯對了才存 */
@@ -518,9 +524,9 @@ function issueLine(issue, extra = null) {
   if (issue.ref && issue.rid && state.result.matches.some((m) => m.name === issue.ref)) {
     actions.push(el("button", { type: "button", class: "link", text: "前往配對", onclick: () => focusMatch(issue.ref, issue.rid.split("|")[0]) }));
   }
-  if (issue.code === "unmapped") actions.push(el("button", { type: "button", class: "link", text: "補對照", onclick: () => { state.tab = "mapping"; renderTabs(); } }));
+  if (issue.code === "unmapped" && !issue.resolved) actions.push(el("button", { type: "button", class: "link", text: "補對照", onclick: () => { state.tab = "mapping"; renderTabs(); } }));
   if (extra) actions.push(extra);
-  if (issue.level !== "error") {
+  if (issue.level !== "error" && !issue.resolved) {   // 修改、補對照、配對要到原本的地方還原
     actions.push(el("button", {
       type: "button", class: "link", text: issue.dismissed ? "取消確認" : "確認無誤",
       onclick: () => act("dismiss", { keys: [issue.key], on: !issue.dismissed }),
@@ -529,7 +535,8 @@ function issueLine(issue, extra = null) {
   return el("div", { class: `issue ${issue.dismissed ? "dismissed" : issue.level}` },
     el("span", { class: `dot ${issue.level}` }),
     el("div", { class: "body" }, el("div", { class: "message", text: issue.message }),
-      el("div", { class: "issue-actions" }, el("span", { class: "meta", text: `${STAGE_TEXT[issue.stage] || issue.stage}${issue.dismissed ? "・已確認" : ""}` }), actions)));
+      issue.note ? el("div", { class: "resolution", text: `→ ${issue.note}` }) : null,
+      el("div", { class: "issue-actions" }, el("span", { class: "meta", text: `${STAGE_TEXT[issue.stage] || issue.stage}${issue.dismissed ? `・${handledText(issue)}` : ""}` }), actions)));
 }
 
 function renderDrawer() {
@@ -582,7 +589,8 @@ function renderDrawer() {
     renderDrawer();
   });
   put($("drawerBody"),
-    issues.length ? el("section", {}, el("h4", { class: "section-title", text: "需要注意" }), el("div", { class: "list" }, issues.map((i) => issueLine(i)))) : null,
+    ...[["需要注意", issues.filter((i) => !i.dismissed)], ["處理紀錄", issues.filter((i) => i.dismissed)]].map(([title, list]) =>
+      list.length ? el("section", {}, el("h4", { class: "section-title", text: title }), el("div", { class: "list" }, list.map((i) => issueLine(i)))) : null),
     el("section", {}, el("h4", { class: "section-title", text: "欄位" }), el("p", { class: "muted small-text", style: "margin:-4px 0 10px", text: "修改後按 Enter 儲存（Shift+Enter 換行），會保留原值。" }), fields),
     el("section", {}, rowStory),
     el("section", {}, el("h4", { class: "section-title", text: "來源" }),
@@ -858,10 +866,10 @@ function renderIssues() {
     .filter((i) => !focus || ((!focus.code || i.code === focus.code) && (!focus.stage || i.stage === focus.stage)));
   const rowOf = new Map();
   state.result.output.rows.forEach((row) => row.issues.forEach((i) => rowOf.set(i, row)));
-  const selectable = issues.filter((i) => i.level !== "error");
+  const selectable = issues.filter((i) => i.level !== "error" && !i.resolved);
   put($("tabBody"),
     el("div", { class: "toolbar" },
-      chips([["review", "需檢查"], ["notice", "提示"], ["dismissed", "已確認"], ["all", "全部"]], state.issueFilter,
+      chips([["review", "需檢查"], ["notice", "提示"], ["dismissed", "已處理"], ["all", "全部"]], state.issueFilter,
         (id) => { state.issueFilter = id; state.checked.clear(); renderTabs(); }),
       focus ? el("span", { class: "badge manual" }, `只看：${focus.label}`,
         el("button", { type: "button", class: "link", style: "margin-left:6px", text: "✕", title: "顯示全部",
@@ -874,7 +882,7 @@ function renderIssues() {
       }) : null),
     issues.length ? el("div", { class: "issue-list" }, issues.map((issue) => {
       const row = rowOf.get(issue.id);
-      const box = el("input", { type: "checkbox", checked: state.checked.has(issue.key), disabled: issue.level === "error" });
+      const box = el("input", { type: "checkbox", checked: state.checked.has(issue.key), disabled: issue.level === "error" || Boolean(issue.resolved) });
       box.addEventListener("change", () => { box.checked ? state.checked.add(issue.key) : state.checked.delete(issue.key); renderTabs(); });
       return el("div", { class: "issue-row" }, box, issueLine(issue, row ? el("button", {
         type: "button", class: "link", text: `第 ${row.row ?? "?"} 列`,
@@ -923,7 +931,6 @@ function bind() {
   zone.addEventListener("dragleave", () => zone.classList.remove("over"));
   zone.addEventListener("drop", (e) => { e.preventDefault(); zone.classList.remove("over"); if (e.dataTransfer.files[0]) uploadWorkbook(e.dataTransfer.files[0]); });
   $("runButton").addEventListener("click", runNow);
-  $("rerunButton").addEventListener("click", () => act("rerun"));
   $("drawerClose").addEventListener("click", () => { state.selected = null; renderTabs(); });
   $("dialog").addEventListener("click", (e) => { if (e.target === $("dialog")) closeDialog(); });
 }

@@ -91,7 +91,9 @@ def test_ambiguous_match_then_manual_pick(env):
     result, _, _ = env()
     assert _row(result, 12)["values"]["報單號碼"] == "AA15A0005"
     assert _row(result, 13)["values"]["報單號碼"] == "AA15A0006"
-    assert _row(result, 12)["status"] == "ok"
+    assert _row(result, 12)["status"] == "confirmed"           # 人工處理過，是藍色的已確認，不是綠色的正確
+    record = [i for i in result["issues"] if i["code"] == "match_manual" and i["rid"] == "invoice:12"]
+    assert record and record[0]["resolved"] == "matched" and "declaration:6" in record[0]["note"]
 
 
 def test_mapping_added_in_ui_is_reused(env):
@@ -100,6 +102,8 @@ def test_mapping_added_in_ui_is_reused(env):
     result, _, _ = env()
     assert _row(result, 8)["values"]["運送方式"] == "SEA"
     assert not result["unmapped"]
+    added = [i for i in result["issues"] if i["code"] == "unmapped" and i["resolved"] == "mapped"]
+    assert added and "SEA" in added[0]["note"]
 
 
 def test_edits_keep_original_and_suppress_cell_issue(env):
@@ -110,7 +114,11 @@ def test_edits_keep_original_and_suppress_cell_issue(env):
     row = _row(result, 9)
     assert row["values"]["金額"] == 300.0 and "金額" in row["edited"]
     assert row["values"]["台幣金額"] == 9630                   # 修改在讀進來時套用，後面的計算會重算
-    assert not any("約 300" in m for m in _messages(result, row))
+    kept = [result["issues"][i] for i in row["issues"] if "約 300" in result["issues"][i]["message"]]
+    assert kept and all(i["resolved"] == "edited" and i["dismissed"] for i in kept)   # 留下紀錄，但不算待處理
+    assert "金額" not in row["raw"]
+    normalize = next(s for s in result["stages"] if s["id"] == "normalize")
+    assert normalize["status"] != "ok"                         # 有人工處理過，不是綠色
     review.set_edit("invoice:9", "金額", None, 300.0)          # 原值和目前資料不同時要提醒
     review.data["edits"]["invoice:9"]["金額"]["original"] = "約 400"
     review.save()

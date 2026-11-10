@@ -93,14 +93,14 @@ def export(result: dict, path: Path) -> Path:
     _widths(sheet)
 
     sheet = book.create_sheet("待檢查")
-    _header(sheet, ["等級", "階段", "列代號", "欄位", "說明", "已確認"])
+    _header(sheet, ["等級", "階段", "列代號", "欄位", "說明", "處理"])
     r = 2
     for issue in issues:
         if issue["level"] == "skip":
             continue
         values = [LEVEL.get(issue["level"], issue["level"]), issue["stage"], issue["rid"] or "",
                   "、".join(issue["out_columns"]) or (issue["column"] or ""), issue["message"],
-                  "是" if issue["dismissed"] else ""]
+                  issue.get("note") or ("已確認" if issue["dismissed"] else "")]
         for c, value in enumerate(values, 1):
             if value != "":
                 _text(sheet.cell(row=r, column=c), value)
