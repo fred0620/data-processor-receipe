@@ -5,4 +5,7 @@
 
 ## 0.1.0 - 2026-11-10
 
-- 第一個版本
+- 第一個版本：依 recipe 執行 Load、Gate、Normalize、Match、Transform、Validate、Mapping、Export
+- 多種比對方式依序嘗試，多筆候選或找不到時由人選擇
+- 對照表找不到的值可以在畫面上補，之後自動套用
+- 修改保留原值，警示可以確認，下載 Excel 含待檢查、配對明細、排除與對照待補

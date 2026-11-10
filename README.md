@@ -1,6 +1,6 @@
 # 資料處理器
 
-待填：一兩句話說明這個工具做什麼。全部在本機執行，資料不會離開這台電腦。
+把 Excel 裡的原始資料依照 recipe 整理成可以交出去的資料表：篩選、清理、多種方式配對、對照代碼、計算與驗證，有疑慮的地方標記出來，在畫面上修正後下載。recipe 由使用者和自己的 AI 依照 [recipe 規格](app/recipe-spec.md) 寫成，不含程式碼。全部在本機執行，資料不會離開這台電腦。
 
 | 你是 | 請看 |
 |---|---|
@@ -35,11 +35,20 @@ app/                     發布時整包給使用者的內容
     paths.py             所有檔案位置
     logs.py              本機日誌（不記資料內容）
     server.py            本機網頁後端（已含安全檢查與自動結束）
+    engine/              recipe 引擎
+      recipe.py          讀取與檢查 recipe，問題一次列出
+      workbook.py        讀 Excel、依別名找表頭
+      textnorm.py        文字、數字、日期的整理規則
+      sandbox.py         DuckDB 沙箱（不能讀檔、連網、裝擴充套件）
+      pipeline.py        Load → Gate → Normalize → Match → Transform → Validate → Mapping → Export
+      review.py          人工修改、指定配對、確認的警示、補上的對照
+      export.py          輸出 Excel
     web/                 前端，無外部相依
-  examples/workspace/    第一次啟動時複製到 workspace 的起始資料
+  examples/workspace/    第一次啟動時複製到 workspace 的起始資料（範例 recipe 與範例資料）
+  recipe-spec.md         給 AI 讀的 recipe 規格（工具裡可以一鍵複製）
   user-guide.html、update-guide.html   由 docs/ 產生
 docs/                    使用手冊、換版說明、設計決策、維護手冊、發版檢查清單
-scripts/                 打包發布、重建手冊與示意圖
+scripts/                 打包發布、重建手冊與示意圖、產生範例資料
 tests/
 .gitlab-ci.yml           測試、弱點檢查、打包與 Release
 OWNER.md                 工具卡

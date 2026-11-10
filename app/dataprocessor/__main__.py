@@ -20,7 +20,7 @@ def _command_doctor(_args) -> int:
     print(f"資料處理器 {__version__}，Python {platform.python_version()}")
     print(f"資料位置：{paths.WORKSPACE}")
     healthy = True
-    for name in ("flask",):  # 新增套件時加在這裡
+    for name in ("flask", "duckdb", "openpyxl", "yaml"):  # 新增套件時加在這裡
         try:
             __import__(name)
             print(f"  OK   {name}")

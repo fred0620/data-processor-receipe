@@ -24,9 +24,15 @@ WORKSPACE = HOME / "workspace"
 OUTPUT = WORKSPACE / "output"        # 匯出給使用者的檔案
 LOGS = WORKSPACE / "logs"            # 操作與錯誤紀錄，不含資料內容
 UPLOADS = WORKSPACE / "uploads"      # 暫存，結束時清除
+SCRATCH = UPLOADS / "scratch"        # 載入資料到 DuckDB 時的暫存檔，用完立刻刪除
+RECIPES = WORKSPACE / "recipes"      # 使用者的 recipe（YAML）
+MAPPINGS = WORKSPACE / "mappings"    # 在介面補上的對照，依 recipe 分檔
+REVIEWS = WORKSPACE / "reviews"      # 人工修改、指定配對、確認過的警示，依 recipe 與檔案分開
+SAMPLES = WORKSPACE / "samples"      # 範例資料
 
 EXAMPLES = APP / "examples"
 MANUAL = APP / "user-guide.html"
+RECIPE_SPEC = APP / "recipe-spec.md"     # 給 AI 讀的 recipe 規格
 GUIDES = {"user-guide.html", "update-guide.html"}  # 工具裡可以開啟的說明文件
 
 
@@ -39,5 +45,5 @@ def prepare() -> None:
         seed = EXAMPLES / "workspace"
         if seed.is_dir():
             shutil.copytree(seed, WORKSPACE, dirs_exist_ok=True)
-    for folder in (OUTPUT, LOGS):
+    for folder in (OUTPUT, LOGS, RECIPES, MAPPINGS, REVIEWS):
         folder.mkdir(parents=True, exist_ok=True)

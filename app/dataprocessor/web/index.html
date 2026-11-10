@@ -4,21 +4,80 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>資料處理器</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/web/style.css">
 </head>
 <body>
 <header class="bar">
   <h1>資料處理器 <span id="version" class="version"></span></h1>
+  <span id="runStatus" class="run-status" hidden></span>
   <a class="manual-link" href="/manual" target="_blank" rel="noopener">使用手冊</a>
 </header>
-<main class="content">
-  <p class="hint">這是範例畫面。把這裡換成工具的功能；資料只在這台電腦處理。</p>
-  <form id="exampleForm" class="row">
-    <input id="exampleInput" type="text" placeholder="輸入文字試試看" maxlength="1000">
-    <button type="submit">送出</button>
+
+<div class="layout">
+  <aside class="setup">
+    <section class="panel">
+      <div class="panel-head">
+        <h2><span class="step">1</span>Recipe</h2>
+        <button id="newRecipe" class="ghost small" type="button">新增</button>
+      </div>
+      <div id="recipeList" class="recipe-list"></div>
+      <p class="muted small-text">Recipe 定義資料怎麼讀、怎麼配對、怎麼輸出。可以請 AI 依照規格寫好再放進來。</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2><span class="step">2</span>資料檔</h2></div>
+      <label class="drop" id="dropZone">
+        <input id="workbookInput" type="file" accept=".xlsx,.xlsm" hidden>
+        <span id="workbookLabel">選擇或拖曳 Excel 檔（.xlsx）</span>
+      </label>
+      <div id="workbookInfo" class="workbook-info"></div>
+      <div id="sampleBox" class="sample-box"></div>
+    </section>
+
+    <button id="runButton" class="primary block" type="button" disabled>執行</button>
+  </aside>
+
+  <main class="work">
+    <section id="empty" class="empty">
+      <h2>選好 recipe 與資料檔後按「執行」</h2>
+      <p class="muted">處理完會顯示每個步驟的結果，有疑慮的地方會標記出來，可以在這裡修正後再下載。</p>
+    </section>
+
+    <section id="result" hidden>
+      <div class="result-head">
+        <div>
+          <h2 id="resultTitle"></h2>
+          <p id="resultSub" class="muted"></p>
+        </div>
+        <div class="actions">
+          <button id="rerunButton" class="ghost" type="button">重新執行</button>
+          <a id="exportButton" class="button primary" href="#">下載 Excel</a>
+        </div>
+      </div>
+      <ol id="pipeline" class="pipeline"></ol>
+      <nav id="tabs" class="tabs"></nav>
+      <div id="tabBody" class="tab-body"></div>
+    </section>
+  </main>
+
+  <aside id="drawer" class="drawer" hidden>
+    <div class="drawer-head">
+      <h3 id="drawerTitle"></h3>
+      <button id="drawerClose" class="ghost small" type="button">關閉</button>
+    </div>
+    <div id="drawerBody" class="drawer-body"></div>
+  </aside>
+</div>
+
+<dialog id="dialog" class="dialog">
+  <form method="dialog" class="dialog-inner">
+    <h3 id="dialogTitle"></h3>
+    <div id="dialogBody"></div>
+    <div class="dialog-actions" id="dialogActions"></div>
   </form>
-  <p id="result" class="result" role="status"></p>
-</main>
+</dialog>
+
 <div id="toast" class="toast" role="alert" hidden></div>
 <script src="/web/app.js"></script>
 </body>

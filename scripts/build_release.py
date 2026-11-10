@@ -30,7 +30,7 @@ APP = ROOT / "app"
 NAME = "data-processor"
 TOP_FILES = ["run.bat", "run.sh"]
 APP_FILES = ["launcher.ps1", "launcher.sh", "pyproject.toml", "uv.lock", ".python-version",
-             "user-guide.html", "update-guide.html"]
+             "user-guide.html", "update-guide.html", "recipe-spec.md"]
 APP_DIRS = ["dataprocessor", "examples"]  # 新增要發布的資料夾時加在這裡
 SKIP = {"__pycache__", ".DS_Store"}
 WINDOWS_TEXT = {".bat", ".cmd", ".ps1"}

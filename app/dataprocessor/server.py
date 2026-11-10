@@ -17,13 +17,19 @@ import socket
 import threading
 import time
 import urllib.request
+import uuid
 import webbrowser
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
-from . import __version__, logs, paths
+from . import __version__, engine, logs, paths
+from .engine.export import export as export_excel
+from .engine.recipe import RECIPE_ID
+from .engine.review import MappingStore, ReviewStore
+from .engine.textnorm import parse_date, parse_integer, parse_number
+from .engine.workbook import read_workbook
 from .logs import clean as log_text
 from .logs import log
 
@@ -187,13 +193,335 @@ def bye():
 
 # ---------- 功能：在這裡加上這個工具自己的 API ----------
 
-@app.post("/api/example")
-def example():
-    """範例：回傳收到的文字。實作時換成真正的功能，日誌只記數量和代號，不記內容。"""
+RECIPE_LIMIT = 512 * 1024
+MAX_RUNS = 10
+_workbooks: dict[str, dict] = {}   # 代號 → 上傳的 workbook
+_runs: dict[str, dict] = {}        # 代號 → 最近一次執行結果
+_run_lock = threading.Lock()
+UNSAFE_NAME = re.compile(r'[\x00-\x1f\x7f<>:"/\\|?*]')
+
+
+def _safe_name(raw: str | None, limit: int = 120) -> str:
+    """只保留檔名本身，去掉路徑、控制字元與 Windows 不允許的字元。"""
+    name = Path((raw or "").replace("\\", "/")).name
+    name = UNSAFE_NAME.sub("_", name).strip(" .")
+    return name[:limit] or "file"
+
+
+def _recipe_path(recipe_id: str) -> Path:
+    if not RECIPE_ID.fullmatch(recipe_id or ""):
+        raise Missing("找不到這份 recipe")
+    path = paths.RECIPES / f"{recipe_id}.yaml"
+    if not path.is_file():
+        raise Missing("找不到這份 recipe")
+    return path
+
+
+def _read_recipe(recipe_id: str):
+    return engine.load_recipe(_recipe_path(recipe_id).read_text(encoding="utf-8"))
+
+
+def _recipe_problem(exc: engine.RecipeError):
+    return jsonify({"error": "recipe 有問題，請修正後再試", "problems": exc.problems}), 422
+
+
+@app.get("/api/recipes")
+def list_recipes():
+    items = []
+    for path in sorted(paths.RECIPES.glob("*.yaml")):
+        item = {"id": path.stem, "name": path.stem, "description": "", "problems": []}
+        try:
+            recipe = engine.load_recipe(path.read_text(encoding="utf-8"))
+            item.update(id=recipe.id, name=recipe.name, description=recipe.description)
+            if recipe.id != path.stem:
+                item["problems"] = [f"檔名 {path.stem}.yaml 和 id「{recipe.id}」不同，請把兩者改成一樣"]
+        except engine.RecipeError as exc:
+            item["problems"] = exc.problems
+        except (OSError, UnicodeDecodeError):
+            item["problems"] = ["無法讀取這個檔案，請確認是 UTF-8 文字檔"]
+        items.append(item)
+    return jsonify({"recipes": items})
+
+
+@app.get("/api/spec")
+def recipe_spec():
+    """recipe 規格全文，讓使用者複製給 AI。"""
+    return jsonify({"text": paths.RECIPE_SPEC.read_text(encoding="utf-8")})
+
+
+@app.get("/api/recipes/<recipe_id>")
+def get_recipe(recipe_id):
+    return jsonify({"id": recipe_id, "text": _recipe_path(recipe_id).read_text(encoding="utf-8")})
+
+
+@app.post("/api/recipes")
+def save_recipe():
+    """存 recipe：可以上傳 .yaml 檔，或貼上文字。存檔前先完整檢查，不合格的不存。"""
+    upload = request.files.get("file")
+    if upload is not None:
+        data = upload.read(RECIPE_LIMIT + 1)
+    else:
+        data = str(_json_body().get("text", "")).encode("utf-8")
+    if len(data) > RECIPE_LIMIT:
+        raise ValueError("recipe 太大（上限 512 KB）")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise ValueError("recipe 要是 UTF-8 文字檔") from None
+    try:
+        recipe = engine.load_recipe(text)
+    except engine.RecipeError as exc:
+        log.info("recipe 檢查不通過 problems=%d", len(exc.problems))
+        return _recipe_problem(exc)
+    paths.RECIPES.mkdir(parents=True, exist_ok=True)
+    (paths.RECIPES / f"{recipe.id}.yaml").write_text(text.replace("\r\n", "\n"), encoding="utf-8")
+    log.info("儲存 recipe id=%s", log_text(recipe.id))
+    return jsonify({"id": recipe.id, "name": recipe.name})
+
+
+@app.delete("/api/recipes/<recipe_id>")
+def delete_recipe(recipe_id):
+    _recipe_path(recipe_id).unlink()
+    log.info("刪除 recipe id=%s", log_text(recipe_id))
+    return jsonify({"ok": True})
+
+
+def _register_workbook(source: Path, name: str) -> dict:
+    sheets = read_workbook(source)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
+    workbook_id = uuid.uuid4().hex[:12]
+    _workbooks[workbook_id] = {"path": source, "name": name, "hash": digest, "sheets": sheets}
+    log.info("載入 workbook id=%s sheets=%d", workbook_id, len(sheets))
+    return {"id": workbook_id, "name": name,
+            "sheets": [{"name": s.name, "rows": len(s.rows)} for s in sheets]}
+
+
+@app.post("/api/workbooks")
+def upload_workbook():
+    upload = request.files.get("file")
+    if upload is None:
+        raise ValueError("請選擇 Excel 檔案")
+    name = _safe_name(upload.filename)
+    if not name.lower().endswith((".xlsx", ".xlsm")):
+        raise ValueError("只支援 .xlsx 或 .xlsm；舊的 .xls 請先另存成 .xlsx")
+    head = upload.stream.read(4)
+    upload.stream.seek(0)
+    if head != b"PK\x03\x04":
+        raise ValueError("這不是有效的 Excel 檔案")
+    paths.UPLOADS.mkdir(parents=True, exist_ok=True)
+    target = paths.UPLOADS / f"{uuid.uuid4().hex[:8]}_{name}"
+    upload.save(target)
+    try:
+        return jsonify(_register_workbook(target, name))
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        if isinstance(exc, ValueError):
+            raise
+        log.warning("無法讀取 workbook", exc_info=exc)
+        raise ValueError("無法讀取這個 Excel 檔案，可能已損毀或有密碼保護") from None
+
+
+@app.get("/api/samples")
+def list_samples():
+    return jsonify({"samples": [p.name for p in sorted(paths.SAMPLES.glob("*.xlsx"))]})
+
+
+@app.post("/api/samples/<name>")
+def use_sample(name):
+    path = paths.SAMPLES / _safe_name(name)
+    if not path.is_file() or path.suffix.lower() != ".xlsx":
+        raise Missing("找不到這份範例")
+    return jsonify(_register_workbook(path, path.name))
+
+
+def _execute(run_id: str) -> dict:
+    record = _runs[run_id]
+    workbook = _workbooks.get(record["workbook"])
+    if workbook is None:
+        raise Missing("檔案已關閉，請重新上傳")
+    try:
+        recipe = _read_recipe(record["recipe"])
+    except engine.RecipeError as exc:
+        raise _RecipeInvalid(exc) from None
+    review = ReviewStore(paths.REVIEWS, recipe.id, workbook["hash"])
+    mappings = MappingStore(paths.MAPPINGS, recipe.id)
+    _jobs[run_id] = {"finished": False}
+    started = time.time()
+    try:
+        with _run_lock:
+            result = engine.run(recipe, workbook["sheets"], review, mappings, paths.SCRATCH)
+    finally:
+        _jobs[run_id]["finished"] = True
+    result["run_id"] = run_id
+    result["workbook"] = {"id": record["workbook"], "name": workbook["name"]}
+    record.update(result=result, review=review)
+    log.info("執行 run=%s recipe=%s status=%s rows=%d issues=%d seconds=%.1f", run_id, log_text(recipe.id),
+             result["status"], len(result["output"]["rows"]), result["counts"]["review"], time.time() - started)
+    return result
+
+
+class _RecipeInvalid(Exception):
+    def __init__(self, error: engine.RecipeError):
+        self.error = error
+
+
+@app.errorhandler(_RecipeInvalid)
+def _recipe_invalid(exc):
+    return _recipe_problem(exc.error)
+
+
+@app.post("/api/runs")
+def start_run():
     body = _json_body()
-    text = str(body.get("text", ""))[:1000]
-    log.info("範例請求 length=%d", len(text))
-    return jsonify({"echo": text})
+    recipe_id = str(body.get("recipe", ""))
+    workbook_id = str(body.get("workbook", ""))
+    _recipe_path(recipe_id)
+    if workbook_id not in _workbooks:
+        raise Missing("檔案已關閉，請重新上傳")
+    run_id = uuid.uuid4().hex[:12]
+    _runs[run_id] = {"recipe": recipe_id, "workbook": workbook_id}
+    while len(_runs) > MAX_RUNS:
+        _runs.pop(next(iter(_runs)))
+    return jsonify(_execute(run_id))
+
+
+def _run_record(run_id: str) -> dict:
+    record = _runs.get(run_id)
+    if record is None or "result" not in record:
+        raise Missing("找不到這次處理結果，請重新執行")
+    return record
+
+
+@app.get("/api/runs/<run_id>")
+def get_run(run_id):
+    return jsonify(_run_record(run_id)["result"])
+
+
+@app.post("/api/runs/<run_id>/rerun")
+def rerun(run_id):
+    _run_record(run_id)
+    return jsonify(_execute(run_id))
+
+
+def _find_row(result: dict, rid: str) -> dict:
+    for row in result["output"]["rows"]:
+        if row["rid"] == rid:
+            return row
+    raise Missing("找不到這一列，請重新執行")
+
+
+@app.post("/api/runs/<run_id>/edit")
+def edit_cell(run_id):
+    """修改一格。原值保留在人工修改紀錄；revert 為 true 時還原。"""
+    record = _run_record(run_id)
+    body = _json_body()
+    rid, name = str(body.get("rid", "")), str(body.get("column", ""))
+    column = next((c for c in record["result"]["output"]["columns"] if c["name"] == name), None)
+    if column is None:
+        raise Missing("找不到這個欄位")
+    if not column["editable"]:
+        raise ValueError(f"{name} 由 recipe 設定為不能修改")
+    row = _find_row(record["result"], rid)
+    review: ReviewStore = record["review"]
+    if body.get("revert"):
+        review.set_edit(rid, name, None, None)
+    else:
+        value = _typed(column["type"], body.get("value"))
+        original = row["edited"][name] if name in row["edited"] else row["raw"].get(name, row["values"].get(name))
+        review.set_edit(rid, name, original, value)
+    review.save()
+    log.info("人工修改 run=%s", run_id)
+    return jsonify(_execute(run_id))
+
+
+def _typed(kind: str, value):
+    text = "" if value is None else str(value).strip()
+    if len(text) > 2000:
+        raise ValueError("內容太長")
+    if text == "" or kind == "text":
+        return text
+    if kind == "date":
+        parsed = parse_date(text)
+        if parsed is None:
+            raise ValueError("看不懂這個日期，請寫成 2026-01-31")
+        return parsed.isoformat()
+    parsed = parse_number(text) if kind == "number" else parse_integer(text)
+    if parsed is None:
+        raise ValueError("請輸入數字" if kind == "number" else "請輸入整數")
+    return parsed
+
+
+@app.post("/api/runs/<run_id>/match")
+def decide_match(run_id):
+    """指定配對：right 是右表列代號；空字串代表確定沒有配對；null 代表交回自動比對。"""
+    record = _run_record(run_id)
+    body = _json_body()
+    match = next((m for m in record["result"]["matches"] if m["name"] == body.get("match")), None)
+    if match is None:
+        raise Missing("找不到這個配對")
+    left, right = str(body.get("left", "")), body.get("right")
+    if left not in match["left_rows"]:
+        raise Missing("找不到左表這一列")
+    if right not in (None, "") and str(right) not in match["right_rows"]:
+        raise Missing("找不到右表這一列")
+    review: ReviewStore = record["review"]
+    review.set_match(match["name"], left, None if right is None else str(right))
+    review.save()
+    log.info("指定配對 run=%s", run_id)
+    return jsonify(_execute(run_id))
+
+
+@app.post("/api/runs/<run_id>/dismiss")
+def dismiss(run_id):
+    record = _run_record(run_id)
+    body = _json_body()
+    keys = body.get("keys")
+    if not isinstance(keys, list) or not keys or len(keys) > 5000:
+        raise ValueError("請選擇要確認的警示")
+    known = {i["key"] for i in record["result"]["issues"]}
+    review: ReviewStore = record["review"]
+    for issue_key in keys:
+        if issue_key in known:
+            review.set_dismissed(issue_key, bool(body.get("on", True)))
+    review.save()
+    return jsonify(_execute(run_id))
+
+
+@app.post("/api/runs/<run_id>/mapping")
+def add_mapping(run_id):
+    """補上對照：之後同一份 recipe 處理其他檔案時也會用到。target 為 null 時移除。"""
+    record = _run_record(run_id)
+    body = _json_body()
+    recipe = _read_recipe(record["recipe"])
+    name = str(body.get("mapping", ""))
+    spec = recipe.mappings.get(name)
+    if spec is None:
+        raise Missing("找不到這張對照表")
+    raw = str(body.get("raw", "")).strip()
+    target = body.get("target")
+    if not raw or len(raw) > 200:
+        raise ValueError("原始值不正確")
+    if target is not None:
+        target = str(target).strip()
+        if not target or len(target) > 200:
+            raise ValueError("請選擇或輸入對應值")
+        if spec.values is not None and target not in spec.values:
+            raise ValueError(f"對應值只能是：{'、'.join(spec.values)}")
+    MappingStore(paths.MAPPINGS, recipe.id).add(name, raw, target)
+    log.info("補上對照 run=%s mapping=%s", run_id, log_text(name))
+    return jsonify(_execute(run_id))
+
+
+@app.get("/api/runs/<run_id>/export")
+def export_run(run_id):
+    record = _run_record(run_id)
+    result = record["result"]
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    stem = Path(_workbooks.get(record["workbook"], {}).get("name", "data")).stem
+    name = _safe_name(f"{stem}_{result['recipe']['id']}_{stamp}.xlsx")
+    path = export_excel(result, paths.OUTPUT / name)
+    log.info("匯出 run=%s rows=%d", run_id, len(result["output"]["rows"]))
+    return send_file(path, as_attachment=True, download_name=name)
 
 
 # ---------- 啟動與自動結束 ----------

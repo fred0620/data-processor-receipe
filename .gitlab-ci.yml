@@ -1,0 +1,52 @@
+# 測試、弱點檢查、打包與 Release。打標籤（例如 v0.1.0）才會打包發布。
+variables:
+  UV_IMAGE: ghcr.io/astral-sh/uv:0.11-python3.12-bookworm-slim
+  UV_CACHE_DIR: .uv-cache
+
+stages: [test, audit, package, release]
+
+default:
+  image: $UV_IMAGE
+  cache:
+    key: uv-$CI_COMMIT_REF_SLUG
+    paths: [.uv-cache]
+
+test:
+  stage: test
+  script:
+    - uv lock --project app --check
+    - uv run --project app pytest tests -q
+
+audit:
+  stage: audit
+  script:
+    - uv export --project app --no-dev --format requirements-txt > requirements.txt
+    - uvx pip-audit -r requirements.txt
+  rules:
+    - if: $CI_COMMIT_TAG          # 發布時弱點檢查不過就不能發布
+    - when: always
+      allow_failure: true
+
+package:
+  stage: package
+  script:
+    - uv run --project app python scripts/build_release.py --wheels
+  artifacts:
+    paths: [dist/]
+  rules:
+    - if: $CI_COMMIT_TAG
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  script:
+    - echo "發布 $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    description: "見 CHANGELOG.md"
+    assets:
+      links:
+        - name: data-processor-${CI_COMMIT_TAG#v}.zip
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_TAG/raw/dist/data-processor-${CI_COMMIT_TAG#v}.zip?job=package"
+  rules:
+    - if: $CI_COMMIT_TAG

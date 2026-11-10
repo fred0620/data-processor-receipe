@@ -29,7 +29,7 @@ def test_security_headers_and_ping():
 
 def test_errors_do_not_leak_details():
     client = server.app.test_client()
-    response = client.post("/api/example", data="not json", content_type="application/json")
+    response = client.post("/api/runs", data="not json", content_type="application/json")
     assert response.status_code == 400
     assert "Traceback" not in response.get_data(as_text=True)
 
