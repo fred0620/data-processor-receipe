@@ -109,6 +109,8 @@ class Input:
     columns: dict[str, Column]
     sheets: list[str] = field(default_factory=list)      # 工作表名稱的萬用字元（item_*），符合的全部疊在一起
     sheet_column: SheetColumn | None = None              # 把工作表名稱（或其中一段）放進一個欄位
+    label: str = ""                                      # 畫面上的名稱，例如「發票」
+    title: list[str] = field(default_factory=list)       # 在畫面上辨識一列用的欄位，例如發票號碼
 
 
 @dataclass
@@ -153,6 +155,7 @@ class Match:
     bring: dict[str, str] | None
     unmatched: str
     rows: str = "expand"              # 對到多列時：expand（每組配對一列）或 combine（彙總成一列）
+    label: str = ""                   # 畫面上的名稱，例如「發票對報關單」
     show: dict[str, list[str]] = field(default_factory=dict)  # 配對畫面優先顯示的欄位
 
     @property
@@ -208,6 +211,15 @@ class Recipe:
     validate: list[Check]
     output: Output
     text: str = ""
+
+    def table_label(self, table: str) -> str:
+        """表在畫面上的名稱：輸入表用 label，配對用 label 或「左表對右表」，其他用名稱。"""
+        if table in self.inputs:
+            return self.inputs[table].label or table
+        for match in self.match:
+            if match.name == table:
+                return match.label or f"{self.table_label(match.left)}對{self.table_label(match.right)}"
+        return table
 
     def tables(self) -> list[str]:
         return [*self.inputs, *(m.name for m in self.match), *(t.name for t in self.transform)]
@@ -369,7 +381,8 @@ def _inputs(check: _Checker, raw: Any, mappings: dict[str, Mapping]) -> dict[str
         where = f"inputs.{table}"
         if check.name(table, where) is None:
             continue
-        spec = check.mapping(spec, where, {"sheet", "sheets", "sheet_column", "header_row", "columns"}, {"columns"})
+        spec = check.mapping(spec, where, {"label", "title", "sheet", "sheets", "sheet_column", "header_row", "columns"},
+                             {"columns"})
         if spec.get("sheet") and spec.get("sheets"):
             check.fail(where, "sheet（挑一張）和 sheets（全部疊起來）只能擇一")
         sheets = check.str_list(spec.get("sheets"), f"{where}.sheets")
@@ -409,8 +422,14 @@ def _inputs(check: _Checker, raw: Any, mappings: dict[str, Mapping]) -> dict[str
                     check.fail(f"{where}.columns.{column.name}.source", f"「{column.source}」要是同一張表、有自己表頭的欄位")
         if sheet_column and sheet_column.name in columns:
             check.fail(f"{where}.sheet_column.name", f"「{sheet_column.name}」和欄位名稱重複")
+        title = check.str_list(spec.get("title"), f"{where}.title")
+        for column in title:
+            if column not in columns and not (sheet_column and column == sheet_column.name):
+                check.fail(f"{where}.title", f"「{column}」不是這張表的欄位")
+        label = check.text(spec.get("label", table), f"{where}.label", limit=40) or table
         result[table] = Input(table, check.str_list(spec.get("sheet"), f"{where}.sheet"),
-                              header_row if isinstance(header_row, int) else None, columns, sheets, sheet_column)
+                              header_row if isinstance(header_row, int) else None, columns, sheets, sheet_column,
+                              label, title)
     return result
 
 
@@ -513,7 +532,7 @@ def _match(check: _Checker, raw: Any, tables: set[str]) -> list[Match]:
         return result
     for i, spec in enumerate(raw):
         where = f"match[{i}]"
-        spec = check.mapping(spec, where, {"name", "left", "right", "mode", "strategies", "bring", "unmatched",
+        spec = check.mapping(spec, where, {"name", "label", "left", "right", "mode", "strategies", "bring", "unmatched",
                                            "rows", "show"},
                              {"name", "left", "right", "strategies"})
         name = check.name(spec.get("name"), f"{where}.name")
@@ -571,7 +590,9 @@ def _match(check: _Checker, raw: Any, tables: set[str]) -> list[Match]:
                 check.fail(f"{where}.name", f"名稱「{name}」重複")
             tables.add(name)
             if strategies and spec.get("left") in tables and spec.get("right") in tables:
-                result.append(Match(name, spec["left"], spec["right"], mode, strategies, bring, unmatched, rows, show))
+                label = check.text(spec.get("label", ""), f"{where}.label", required=False, limit=40) or ""
+                result.append(Match(name, spec["left"], spec["right"], mode, strategies, bring, unmatched,
+                                    rows=rows, show=show, label=label))
     return result
 
 

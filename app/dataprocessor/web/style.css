@@ -325,7 +325,15 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center;
   padding: 10px 12px; background: var(--canvas); border-radius: var(--radius-md);
 }
-.candidate-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; font-size: 12px; }
+.candidate { grid-template-columns: 1fr; gap: 8px; }
+.candidate-head { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.candidate-head .spacer { flex: 1; }
+.row-title { display: inline-flex; align-items: baseline; gap: 0; min-width: 0; white-space: nowrap; }
+.row-title strong { font-weight: 600; }
+.row-title .muted { font-size: 12px; }
+.side-title { margin-bottom: 10px; font-size: 14px; }
+.match-card header .how { color: var(--text-strong); }
+.kv dd.blank { color: var(--text-faint); }
 .candidate .kv { grid-template-columns: 80px minmax(0, 1fr); }
 .same { color: var(--success-text); font-weight: 500; }
 .diff { color: var(--warning-text); font-weight: 500; }
@@ -378,6 +386,17 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
   font: 12.5px/1.55 var(--mono); resize: vertical;
 }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dialog-inner > div > .chips { margin-bottom: 12px; }
+.explain { max-height: 60vh; overflow: auto; padding-right: 6px; font-size: 13px; line-height: 1.65; }
+.explain-lead { margin: 0 0 14px; color: var(--text); }
+.explain section { margin-bottom: 18px; }
+.explain h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+.explain > section > ul { margin: 0; padding-left: 18px; }
+.explain > section > ul > li { margin-bottom: 6px; }
+.explain-sub { margin: 2px 0 0; padding-left: 16px; color: var(--text); list-style: circle; }
+.explain-code { margin-top: 4px; }
+.explain-code summary { font-size: 12px; }
+.explain-code pre { margin: 6px 0 0; padding: 8px 10px; border-radius: var(--radius-md); background: var(--canvas); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .problems {
   margin: 0; padding: 10px 14px 10px 30px; border-radius: var(--radius-md); background: var(--danger-soft);
   color: var(--danger-text); font-size: 12.5px; max-height: 260px; overflow: auto;

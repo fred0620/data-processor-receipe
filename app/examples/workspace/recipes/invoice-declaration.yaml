@@ -7,6 +7,8 @@ description: 排除作廢發票，依發票號碼配對報關單，找不到時�
 
 inputs:
   invoice:
+    label: 發票
+    title: [invoice_no]
     sheet: [發票明細]
     columns:
       invoice_no: {aliases: [發票號碼, Invoice No], required: true, text: [trim, halfwidth, upper, no_space]}
@@ -18,6 +20,8 @@ inputs:
       ship_mode: {aliases: [運送方式], map: ship_mode}
       status: {aliases: [狀態]}
   declaration:
+    label: 報關單
+    title: [decl_no]
     sheet: [報關單]
     columns:
       decl_no: {aliases: [報單號碼], required: true, text: [trim, halfwidth, upper]}
@@ -27,6 +31,7 @@ inputs:
       amount: {aliases: [申報金額], type: number}
       ship_mode: {aliases: [運輸方式], map: ship_mode}
   fx:
+    label: 匯率表
     sheet: [匯率]
     columns:
       currency: {aliases: [幣別], required: true, text: [trim, halfwidth, upper]}
@@ -48,6 +53,7 @@ mappings:
 
 match:
   - name: inv_decl
+    label: 發票對報關單
     left: invoice
     right: declaration
     mode: one_to_one
@@ -65,6 +71,7 @@ match:
     unmatched: flag
 
   - name: with_fx
+    label: 帶入匯率
     left: inv_decl
     right: fx
     strategies:

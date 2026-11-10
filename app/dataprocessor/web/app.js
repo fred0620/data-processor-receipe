@@ -65,8 +65,8 @@ function showError(error, title = "無法完成") {
 /* ---------- 對話框 ---------- */
 function openDialog(title, body, actions) {
   $("dialogTitle").textContent = title;
-  $("dialogBody").replaceChildren(...[body].flat());
-  $("dialogActions").replaceChildren(...actions);
+  put($("dialogBody"), body);
+  put($("dialogActions"), actions);
   if (!$("dialog").open) $("dialog").showModal();
 }
 const closeDialog = () => $("dialog").close();
@@ -143,14 +143,33 @@ function renderRecipes() {
   updateRunButton();
 }
 
+/* recipe 的白話說明：由程式依 recipe 產生，和實際執行的邏輯一致，讓人不用讀 YAML 也能檢查 */
+function explainView(data) {
+  return el("div", { class: "explain" },
+    data.description ? el("p", { class: "explain-lead", text: data.description }) : null,
+    data.sections.map((section) => el("section", {},
+      el("h4", { text: section.title }),
+      el("ul", {}, section.items.map((item) => el("li", {},
+        el("div", { text: item.text }),
+        item.sub.length ? el("ul", { class: "explain-sub" }, item.sub.map((line) => el("li", { text: line }))) : null,
+        item.code ? el("details", { class: "explain-code" }, el("summary", { text: "SQL 原文" }), el("pre", { text: item.code })) : null))))));
+}
+
 async function viewRecipe(recipe) {
   try {
-    const data = await api(`/api/recipes/${encodeURIComponent(recipe.id)}`);
+    const [data, info] = await Promise.all([api(`/api/recipes/${encodeURIComponent(recipe.id)}`),
+      api(`/api/recipes/${encodeURIComponent(recipe.id)}/explain`).catch(() => null)]);
     const area = el("textarea", { readonly: true });
     area.value = data.text;
-    openDialog(recipe.name, area, [
-      el("button", { type: "button", class: "ghost", text: "複製", onclick: () => copyText(data.text) }),
-      el("button", { type: "button", class: "ghost", text: "修改後另存", onclick: () => editRecipe(data.text) }),
+    const body = el("div");
+    const show = (mode) => {
+      put(body, chips([["explain", "說明"], ["yaml", "YAML"]], mode, show),
+        mode === "explain" && info ? explainView(info) : area);
+    };
+    show(info ? "explain" : "yaml");
+    openDialog(recipe.name, body, [
+      el("button", { type: "button", class: "ghost", text: "複製 YAML", onclick: () => copyText(data.text) }),
+      el("button", { type: "button", class: "ghost", text: "修改", onclick: () => editRecipe(data.text) }),
       el("button", { type: "button", class: "primary", text: "關閉", onclick: closeDialog }),
     ]);
   } catch (error) { showError(error); }
@@ -172,30 +191,44 @@ function editRecipe(text = "") {
   const area = el("textarea", { placeholder: "把 AI 寫好的 recipe（YAML）貼在這裡，或選擇 .yaml 檔案" });
   area.value = text;
   const file = el("input", { type: "file", accept: ".yaml,.yml,.txt", hidden: true });
-  const problems = el("div");
   file.addEventListener("change", async () => { if (file.files[0]) area.value = await file.files[0].text(); });
+  const problems = el("div");
+  const showProblems = (error) => {
+    if (!error.problems.length) { toast(error.message, true); return; }
+    put(problems, el("ul", { class: "problems" }, error.problems.map((p) => el("li", { text: p }))),
+      el("button", { type: "button", class: "link", text: "複製問題給 AI", onclick: () => copyText(problemsText(error.problems)) }));
+  };
   const save = async () => {
     try {
       const data = await post("/api/recipes", { text: area.value });
       closeDialog();
       toast(`已儲存「${data.name}」`);
       await loadRecipes(data.id);
-    } catch (error) {
-      if (!error.problems.length) { toast(error.message, true); return; }
-      problems.replaceChildren(
-        el("ul", { class: "problems" }, error.problems.map((p) => el("li", { text: p }))),
-        el("button", { type: "button", class: "link", text: "複製問題給 AI", onclick: () => copyText(problemsText(error.problems)) }));
-    }
+    } catch (error) { editStep(); showProblems(error); }
   };
-  openDialog("新增或更新 recipe", [
-    el("p", { class: "muted" }, "先把規格複製給 AI，連同你的欄位與處理規則請它寫 recipe，再貼回這裡。存檔前會完整檢查；id 相同時會覆蓋舊的 recipe。 ",
+  /* 第二步：先看白話說明，確認邏輯對了才存 */
+  const review = async () => {
+    try {
+      const info = await post("/api/recipes/explain", { text: area.value });
+      openDialog(`確認「${info.name}」的處理方式`, [
+        el("p", { class: "muted", text: "下面是程式依 recipe 整理的說明，和實際執行的邏輯一致。確認每一步都符合你的規則再儲存；不對的地方回去請 AI 修改。" }),
+        explainView(info),
+      ], [
+        el("button", { type: "button", class: "ghost", text: "返回修改", onclick: editStep }),
+        el("button", { type: "button", class: "primary", text: "確認並儲存", onclick: save }),
+      ]);
+    } catch (error) { showProblems(error); }
+  };
+  const editStep = () => openDialog("新增或更新 recipe", [
+    el("p", { class: "muted" }, "先把規格複製給 AI，連同你的欄位與處理規則請它寫 recipe，再貼回這裡。下一步會把 recipe 翻成白話讓你確認。 ",
       el("button", { type: "button", class: "link", text: "複製規格給 AI", onclick: copySpec })),
     area, problems,
   ], [
     el("button", { type: "button", class: "ghost", text: "選擇檔案", onclick: () => file.click() }), file,
     el("button", { type: "button", class: "ghost", text: "取消", onclick: closeDialog }),
-    el("button", { type: "button", class: "primary", text: "檢查並儲存", onclick: save }),
+    el("button", { type: "button", class: "primary", text: "下一步：確認說明", onclick: review }),
   ]);
+  editStep();
 }
 
 /* ---------- 資料檔 ---------- */
@@ -421,9 +454,8 @@ function renderRows(keepMenu = false) {
 /* ---------- 單列細節 ---------- */
 function issueLine(issue, extra = null) {
   const actions = [];
-  if (issue.stage === "match" && issue.rid) {
-    const match = state.result.matches.find((m) => issue.message.startsWith(`${m.name}：`));
-    if (match) actions.push(el("button", { type: "button", class: "link", text: "前往配對", onclick: () => focusMatch(match.name, issue.rid.split("|")[0]) }));
+  if (issue.ref && issue.rid && state.result.matches.some((m) => m.name === issue.ref)) {
+    actions.push(el("button", { type: "button", class: "link", text: "前往配對", onclick: () => focusMatch(issue.ref, issue.rid.split("|")[0]) }));
   }
   if (issue.code === "unmapped") actions.push(el("button", { type: "button", class: "link", text: "補對照", onclick: () => { state.tab = "mapping"; renderTabs(); } }));
   if (extra) actions.push(extra);
@@ -491,15 +523,32 @@ function pickColumns(values, preferred) {
 function valuesList(values, columns, compare) {
   return el("dl", { class: "kv" }, columns.flatMap((k) => {
     const v = values[k];
-    let cls = null;
-    if (compare && k in compare && v !== null && compare[k] !== null) cls = String(v) === String(compare[k]) ? "same" : "diff";
-    return [el("dt", { text: k, title: k }), el("dd", { class: cls, text: v ?? "" })];
+    const blank = v === null || v === undefined || v === "";
+    let cls = blank ? "blank" : null;
+    if (!blank && compare && k in compare && compare[k] !== null && compare[k] !== "") cls = String(v) === String(compare[k]) ? "same" : "diff";
+    return [el("dt", { text: k, title: k }), el("dd", { class: cls, text: blank ? "空白" : v })];
   }));
+}
+
+/* 一列的辨識資訊：辨識欄位（例如發票號碼）加上 Excel 列號，讓人分得出是哪一筆 */
+function rowTitle(record, titleColumns) {
+  const title = titleColumns.map((k) => record.values[k]).filter((v) => v !== null && v !== "").join("・");
+  return el("span", { class: "row-title" }, title ? el("strong", { text: title }) : null,
+    el("span", { class: "muted", text: `${title ? "　" : ""}第 ${record.row ?? "?"} 列` }));
+}
+
+/* 候選之間值不一樣的欄位：一定要顯示，否則候選看起來會一模一樣 */
+function differingColumns(records) {
+  if (records.length < 2) return [];
+  const keys = Object.keys(records[0].values);
+  return keys.filter((k) => new Set(records.map((r) => String(r.values[k] ?? ""))).size > 1);
 }
 
 function oneLine(values, columns) {
   return columns.map((k) => values[k]).filter((v) => v !== null && v !== "").join("・");
 }
+
+function uniq(list) { return [...new Set(list)]; }
 
 function renderMatch() {
   const r = state.result;
@@ -516,7 +565,7 @@ function renderMatch() {
   }
   const c = match.counts;
   put($("tabBody"),
-    r.matches.length > 1 ? el("div", { class: "toolbar" }, chips(r.matches.map((m) => [m.name, `${m.left} → ${m.right}`]), match.name,
+    r.matches.length > 1 ? el("div", { class: "toolbar" }, chips(r.matches.map((m) => [m.name, m.label]), match.name,
       (id) => { Object.assign(state, { matchName: id, matchFocus: null, pickerFor: null }); renderTabs(); })) : null,
     el("div", { class: "toolbar" },
       chips([["todo", `需處理 ${c.ambiguous + c.unmatched + c.review}`], ["all", `全部 ${match.rows.length}`], ["manual", `人工 ${c.manual + c.none}`]],
@@ -526,16 +575,16 @@ function renderMatch() {
       el("span", { class: "spacer" }),
       el("button", { type: "button", class: "ghost small", text: state.matchAll ? "只看比對欄位" : "顯示全部欄位",
         onclick: () => { state.matchAll = !state.matchAll; renderMatch(); } })),
-    el("p", { class: "match-meta muted" }, `${match.mode_label}・${match.strategies.join(" → ")}`,
-      match.multi && match.pairs ? `・共 ${match.pairs} 組` : ""),
+    el("p", { class: "match-meta muted" }, `拿每一列${match.left_label}找對應的${match.right_label}（${match.mode_label}）。依序嘗試：${match.strategies.join(" → ")}`,
+      match.multi && match.pairs ? `，共 ${match.pairs} 組` : ""),
     rows.length ? el("div", { class: "match-list" }, rows.slice(0, 200).map((row) => matchCard(match, row)))
       : el("div", { class: "note", text: state.matchFilter === "todo" ? "所有配對都已處理。" : "沒有符合的配對。" }),
     rows.length > 200 ? el("p", { class: "muted", text: `只顯示前 200 筆，共 ${rows.length} 筆，請用搜尋縮小範圍。` }) : null,
     match.unused_right.length ? el("details", { class: "unused" },
-      el("summary", { text: `${match.right} 沒用到的列（${match.unused_right.length}）` }),
+      el("summary", { text: `沒用到的${match.right_label}（${match.unused_right.length}）` }),
       el("div", { class: "picker-list" }, match.unused_right.slice(0, 200).map((rid) => el("div", { class: "pick-row" },
-        el("span", { class: "rowno", text: match.right_rows[rid].row ?? "" }),
-        el("span", { class: "summary", text: oneLine(match.right_rows[rid].values, Object.keys(match.right_rows[rid].values)) })))))
+        rowTitle(match.right_rows[rid], match.right_title),
+        el("span", { class: "summary muted", text: oneLine(match.right_rows[rid].values, Object.keys(match.right_rows[rid].values)) })))))
       : null);
 }
 
@@ -543,10 +592,12 @@ function matchCard(match, row) {
   const left = match.left_rows[row.left];
   const [label, tone] = MATCH_TEXT[row.status];
   const decide = (rights) => { state.pickerFor = null; return act("match", { match: match.name, left: row.left, rights }); };
-  const reviewIssue = state.result.issues.find((i) => i.code === "match_review" && i.rid === row.left && i.message.startsWith(`${match.name}：`));
-  const leftColumns = pickColumns(left.values, match.show.left);
-  const sample = match.right_rows[row.rights[0] || row.candidates[0]?.rid] || Object.values(match.right_rows)[0];
-  const rightColumns = sample ? pickColumns(sample.values, match.show.right) : [];
+  const reviewIssue = state.result.issues.find((i) => i.code === "match_review" && i.rid === row.left && i.ref === match.name);
+  const leftColumns = pickColumns(left.values, match.show.left).filter((k) => !match.left_title.includes(k));
+  const candidates = row.candidates.map((c) => match.right_rows[c.rid]).filter(Boolean);
+  const sample = match.right_rows[row.rights[0]] || candidates[0] || Object.values(match.right_rows)[0];
+  const baseRight = sample ? pickColumns(sample.values, match.show.right) : [];
+  const rightColumns = uniq([...baseRight, ...differingColumns(candidates)]).filter((k) => !match.right_title.includes(k));
   const togglePicker = () => { state.pickerFor = state.pickerFor === row.left ? null : row.left; renderMatch(); };
 
   const actions = [];
@@ -555,36 +606,44 @@ function matchCard(match, row) {
   actions.push(el("button", { type: "button", class: "small ghost", text: match.multi ? "加入" : row.rights.length ? "改選" : "手動指定", onclick: togglePicker }));
   if (row.status !== "none") actions.push(el("button", { type: "button", class: "small ghost", text: "沒有配對", onclick: () => decide([]) }));
 
+  const how = row.status === "ambiguous" ? `依「${row.how}」找到 ${row.total || candidates.length} 筆可能的${match.right_label}，請選一筆`
+    : row.status === "unmatched" ? `每一種方式都找不到對應的${match.right_label}`
+      : row.status === "none" ? "已確認沒有對應" : row.status === "manual" ? "人工指定" : `依「${row.how}」配到`;
+
   let side;
   if (row.status === "ambiguous") {
-    side = el("div", { class: "candidates" }, el("p", { class: "muted small-text", style: "margin:0 0 4px", text: match.multi ? "選擇要歸到這一列的資料" : "選擇正確的一筆" }),
-      row.candidates.map((cand) => {
-        const target = match.right_rows[cand.rid];
-        return el("div", { class: "candidate" },
-          valuesList(target.values, rightColumns, left.values),
-          el("div", { class: "candidate-side" }, cand.score !== null && cand.score !== undefined ? el("span", { class: "muted", text: `相似 ${Number(cand.score).toFixed(2)}` }) : null,
-            el("button", { type: "button", class: "small primary", text: "選這筆", onclick: () => decide(match.multi ? [...row.rights, cand.rid] : [cand.rid]) })));
-      }));
+    side = el("div", { class: "candidates" }, candidates.map((target, i) => {
+      const cand = row.candidates[i];
+      return el("div", { class: "candidate" },
+        el("div", { class: "candidate-head" }, rowTitle(target, match.right_title),
+          cand.score !== null && cand.score !== undefined ? el("span", { class: "muted", text: `相似度 ${Number(cand.score).toFixed(2)}` }) : null,
+          el("span", { class: "spacer" }),
+          el("button", { type: "button", class: "small primary", text: "選這筆", onclick: () => decide(match.multi ? [...row.rights, cand.rid] : [cand.rid]) })),
+        valuesList(target.values, rightColumns, left.values));
+    }));
   } else if (row.rights.length === 1 && !match.multi) {
-    side = valuesList(match.right_rows[row.rights[0]].values, rightColumns, left.values);
+    const target = match.right_rows[row.rights[0]];
+    side = el("div", {}, el("div", { class: "side-title" }, rowTitle(target, match.right_title)), valuesList(target.values, rightColumns, left.values));
   } else if (row.rights.length) {
-    side = el("div", { class: "picker-list" }, row.rights.map((rid) => el("div", { class: "pick-row" },
-      el("span", { class: "rowno", text: match.right_rows[rid].row ?? "" }),
-      el("span", { class: "summary", title: oneLine(match.right_rows[rid].values, Object.keys(match.right_rows[rid].values)), text: oneLine(match.right_rows[rid].values, rightColumns) }),
-      el("button", { type: "button", class: "link danger", text: "移除", onclick: () => decide(row.rights.filter((x) => x !== rid)) }))));
+    side = el("div", { class: "picker-list" }, row.rights.map((rid) => {
+      const target = match.right_rows[rid];
+      return el("div", { class: "pick-row" },
+        rowTitle(target, match.right_title),
+        el("span", { class: "summary muted", title: oneLine(target.values, Object.keys(target.values)), text: oneLine(target.values, rightColumns) }),
+        el("button", { type: "button", class: "link danger", text: "移除", onclick: () => decide(row.rights.filter((x) => x !== rid)) }));
+    }));
   } else {
     side = el("p", { class: "muted", text: row.status === "none" ? "已確認沒有對應的資料" : "沒有找到對應的資料" });
   }
-  const rightTitle = row.rights.length === 1 && !match.multi ? `${match.right}・第 ${match.right_rows[row.rights[0]].row ?? "?"} 列`
-    : row.rights.length ? `${match.right}・${row.rights.length} 列` : match.right;
   return el("article", { class: "match-card" },
     el("header", {},
       el("span", { class: `badge ${tone}`, text: label }),
-      row.how ? el("span", { class: "muted", text: row.how }) : null,
+      el("span", { class: "how", text: how }),
       el("span", { class: "spacer" }), actions),
     el("div", { class: "match-body" },
-      el("div", { class: "side" }, el("h4", { text: `${match.left}・第 ${left.row ?? "?"} 列` }), valuesList(left.values, leftColumns)),
-      el("div", { class: "side" }, el("h4", { text: rightTitle }), side,
+      el("div", { class: "side" }, el("h4", { text: match.left_label }), el("div", { class: "side-title" }, rowTitle(left, match.left_title)),
+        valuesList(left.values, leftColumns)),
+      el("div", { class: "side" }, el("h4", { text: match.right_label + (match.multi && row.rights.length ? `・${row.rights.length} 筆` : "") }), side,
         state.pickerFor === row.left ? picker(match, row, rightColumns, decide) : null)));
 }
 
@@ -598,13 +657,13 @@ function picker(match, row, columns, decide) {
       .filter((rid) => !taken.has(rid) && (!needle || JSON.stringify(match.right_rows[rid].values).toLowerCase().includes(needle)))
       .sort((a, b) => Number(unused.has(b)) - Number(unused.has(a)));
     put(list, rids.length ? rids.slice(0, 50).map((rid) => el("div", { class: "pick-row" },
-      el("span", { class: "rowno", text: match.right_rows[rid].row ?? "" }),
-      el("span", { class: "summary", title: oneLine(match.right_rows[rid].values, Object.keys(match.right_rows[rid].values)), text: oneLine(match.right_rows[rid].values, columns) }),
+      rowTitle(match.right_rows[rid], match.right_title),
+      el("span", { class: "summary muted", title: oneLine(match.right_rows[rid].values, Object.keys(match.right_rows[rid].values)), text: oneLine(match.right_rows[rid].values, columns) }),
       unused.has(rid) ? el("span", { class: "badge", text: "未使用" }) : null,
       el("button", { type: "button", class: "small", text: match.multi ? "加入" : "選這筆", onclick: () => decide(match.multi ? [...row.rights, rid] : [rid]) })))
       : el("p", { class: "muted", text: "找不到符合的資料" }));
   };
-  const input = el("input", { class: "search", type: "search", placeholder: `在 ${match.right} 裡搜尋` });
+  const input = el("input", { class: "search", type: "search", placeholder: `在${match.right_label}裡搜尋` });
   input.addEventListener("input", () => draw(input.value));
   draw("");
   return el("div", { class: "picker" }, input, list);

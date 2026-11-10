@@ -25,6 +25,7 @@ from flask import Flask, Response, jsonify, redirect, request, send_file, send_f
 from werkzeug.exceptions import HTTPException
 
 from . import __version__, engine, logs, paths
+from .engine.explain import explain
 from .engine.export import export as export_excel
 from .engine.recipe import RECIPE_ID
 from .engine.review import MappingStore, ReviewStore
@@ -284,6 +285,27 @@ def list_recipes():
 def recipe_spec():
     """recipe 規格全文，讓使用者複製給 AI。"""
     return jsonify({"text": paths.RECIPE_SPEC.read_text(encoding="utf-8")})
+
+
+@app.get("/api/recipes/<recipe_id>/explain")
+def explain_saved(recipe_id):
+    """把已存的 recipe 翻成白話說明。"""
+    try:
+        return jsonify(explain(_read_recipe(recipe_id)))
+    except engine.RecipeError as exc:
+        return _recipe_problem(exc)
+
+
+@app.post("/api/recipes/explain")
+def explain_draft():
+    """還沒存的 recipe 先預覽說明；有問題時回傳問題清單。"""
+    text = str(_json_body().get("text", ""))
+    if len(text.encode("utf-8")) > RECIPE_LIMIT:
+        raise ValueError("recipe 太大（上限 512 KB）")
+    try:
+        return jsonify(explain(engine.load_recipe(text)))
+    except engine.RecipeError as exc:
+        return _recipe_problem(exc)
 
 
 @app.get("/api/recipes/<recipe_id>")

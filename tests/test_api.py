@@ -92,3 +92,14 @@ def test_rejects_non_excel(client):
     response = client.post("/api/workbooks", data={"file": (io.BytesIO(b"hello"), "a.xlsx")},
                            content_type="multipart/form-data", headers=LOCAL)
     assert response.status_code == 400
+
+
+def test_recipe_explanation(client):
+    text = (EXAMPLES / "recipes" / "invoice-declaration.yaml").read_text(encoding="utf-8")
+    data = client.post("/api/recipes/explain", json={"text": text}, headers=LOCAL).json
+    titles = [s["title"] for s in data["sections"]]
+    assert titles[0] == "讀取資料" and "配對：發票對報關單" in titles
+    match = next(s for s in data["sections"] if s["title"] == "配對：發票對報關單")
+    assert any("發票的「發票號碼」等於報關單的「發票參考」" in line for item in match["items"] for line in item["sub"])
+    bad = client.post("/api/recipes/explain", json={"text": "recipe: 1\nid: x\n"}, headers=LOCAL)
+    assert bad.status_code == 422 and bad.json["problems"]

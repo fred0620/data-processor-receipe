@@ -40,6 +40,7 @@ class Issue:
     column: str | None = None        # 來源欄位
     out_columns: list[str] = field(default_factory=list)  # 標在哪些輸出欄位
     dismissed: bool = False
+    ref: str | None = None           # 相關的配對名稱，介面用來跳到配對畫面
 
     @property
     def key(self) -> str:
@@ -48,7 +49,7 @@ class Issue:
     def to_json(self, index: int) -> dict:
         return {"id": index, "key": self.key, "level": self.level, "stage": self.stage, "code": self.code,
                 "message": self.message, "rid": self.rid, "table": self.table, "column": self.column,
-                "out_columns": self.out_columns, "dismissed": self.dismissed}
+                "out_columns": self.out_columns, "dismissed": self.dismissed, "ref": self.ref}
 
 
 class Mapper:
@@ -156,20 +157,20 @@ class _Run:
             found = locate(sheets, spec.sheet, spec.header_row, aliases)
             if found is None:
                 where = f"工作表 {'、'.join(spec.sheet)}" if spec.sheet else "所有工作表"
-                self.fatal([f"輸入表 {spec.name}：在{where}裡找不到任何一個欄位的表頭"])
+                self.fatal([f"{spec.label}：在{where}裡找不到任何一個欄位的表頭"])
                 return None
             return [found]
         matched = [s for s in sheets
                    if any(fnmatch.fnmatchcase(halfwidth(s.name).casefold(), halfwidth(p).casefold()) for p in spec.sheets)]
         if not matched:
             names = "、".join(s.name for s in sheets)
-            self.fatal([f"輸入表 {spec.name}：沒有工作表符合 {'、'.join(spec.sheets)}（這個檔案的工作表：{names}）"])
+            self.fatal([f"{spec.label}：沒有工作表符合 {'、'.join(spec.sheets)}（這個檔案的工作表：{names}）"])
             return None
         result, problems = [], []
         for sheet in matched:
             found = locate([sheet], [], spec.header_row, aliases)
             if found is None:
-                problems.append(f"輸入表 {spec.name}：工作表「{sheet.name}」找不到任何一個欄位的表頭")
+                problems.append(f"{spec.label}：工作表「{sheet.name}」找不到任何一個欄位的表頭")
             else:
                 result.append(found)
         if problems:
@@ -189,7 +190,7 @@ class _Run:
                 required = [c for c in found.missing if spec.columns[c].required]
                 if required:
                     names = "、".join(f"{c}（{'/'.join(spec.columns[c].aliases)}）" for c in required)
-                    problems.append(f"輸入表 {spec.name}：工作表「{found.sheet}」第 {found.header_row} 列找不到必要欄位 {names}")
+                    problems.append(f"{spec.label}：工作表「{found.sheet}」第 {found.header_row} 列找不到必要欄位 {names}")
             if problems:
                 self.fatal(problems)
                 continue
@@ -203,7 +204,7 @@ class _Run:
             for found in targets:
                 for column in found.missing:
                     self.issues.append(Issue("notice", "load", "missing_column",
-                                             f"{spec.name} 在工作表「{found.sheet}」找不到欄位 {column}"
+                                             f"{spec.label} 在工作表「{found.sheet}」找不到欄位 {column}"
                                              f"（{'/'.join(spec.columns[column].aliases)}），整欄留空",
                                              table=spec.name, column=column))
                 for number, raw in data_rows(by_name[found.sheet], found):
@@ -230,7 +231,7 @@ class _Run:
                             row[name] = None if value == "" else value
                             self.applied[(rid, out_name)] = change.get("original")
                     rows.append(row)
-                self.stage("load", f"{spec.name}：工作表「{found.sheet}」第 {found.header_row} 列為表頭，"
+                self.stage("load", f"{spec.label}：工作表「{found.sheet}」第 {found.header_row} 列為表頭，"
                                    f"{sum(1 for r in rows if r['_sheet'] == found.sheet)} 列")
             types = {"_rid": "VARCHAR", "_row": "BIGINT", "_sheet": "VARCHAR",
                      **({spec.sheet_column.name: "VARCHAR"} if spec.sheet_column else {}),
@@ -337,6 +338,8 @@ class _Run:
 
     def _match_one(self, box: Sandbox, spec) -> None:
         where = f"match「{spec.name}」"
+        label = self.recipe.table_label(spec.name)
+        right_label = self.recipe.table_label(spec.right)
         left, right = quote(spec.left), quote(spec.right)
         for table in (spec.left, spec.right):
             if "_rid" not in box.columns(table):
@@ -358,8 +361,8 @@ class _Run:
             chosen = [rid for rid in chosen if rid in right_rids]
             if lost:
                 self.issues.append(Issue("review", "match", "manual_lost",
-                                         f"{spec.name}：之前人工指定的 {'、'.join(lost)} 已不存在"
-                                         + ("，改回自動比對" if not chosen else ""), rid=left_rid, table=spec.left))
+                                         f"{label}：之前人工指定的 {'、'.join(lost)} 已不存在"
+                                         + ("，改回自動比對" if not chosen else ""), rid=left_rid, table=spec.left, ref=spec.name))
                 if not chosen:
                     continue
             if not chosen:
@@ -408,24 +411,26 @@ class _Run:
             decided[lr] = decision
             if decision["status"] == "ambiguous":
                 total = decision.get("total", len(decision["candidates"]))
-                text = (f"{spec.name}：「{decision['how']}」找到 {total} 筆候選，請選擇"
+                text = (f"{label}：依「{decision['how']}」找到 {total} 筆可能的{right_label}，請選擇"
                         if not decision.get("conflict") else
-                        f"{spec.name}：候選的 {spec.right} 同時對到其他列，請選擇")
-                self.issues.append(Issue("review", "match", "match_ambiguous", text, rid=lr, table=spec.left))
+                        f"{label}：可能的{right_label}同時對到其他列，請選擇")
+                self.issues.append(Issue("review", "match", "match_ambiguous", text, rid=lr, table=spec.left, ref=spec.name))
             elif decision["status"] == "unmatched" and spec.unmatched == "flag":
                 self.issues.append(Issue("review", "match", "match_none",
-                                         f"{spec.name}：所有比對方式都找不到對應的 {spec.right}", rid=lr, table=spec.left))
+                                         f"{label}：所有比對方式都找不到對應的{right_label}", rid=lr, table=spec.left,
+                                         ref=spec.name))
             elif decision["status"] == "review":
                 self.issues.append(Issue("review", "match", "match_review",
-                                         f"{spec.name}：以「{decision['how']}」配對，請確認", rid=lr, table=spec.left))
+                                         f"{label}：依「{decision['how']}」配對，請確認", rid=lr, table=spec.left,
+                                         ref=spec.name))
             if decision.get("overflow"):
                 self.issues.append(Issue("review", "match", "match_overflow",
-                                         f"{spec.name}：對到超過 {MAX_MULTI} 列，只取前 {MAX_MULTI} 列，比對條件可能太寬",
-                                         rid=lr, table=spec.left))
+                                         f"{label}：對到超過 {MAX_MULTI} 列，只取前 {MAX_MULTI} 列，比對條件可能太寬",
+                                         rid=lr, table=spec.left, ref=spec.name))
             if decision.get("dropped"):
                 self.issues.append(Issue("review", "match", "match_shared",
-                                         f"{spec.name}：{len(decision['dropped'])} 筆 {spec.right} 同時對到其他列，已先拿掉，"
-                                         "請確認要歸給哪一列", rid=lr, table=spec.left))
+                                         f"{label}：{len(decision['dropped'])} 筆{right_label}同時對到其他列，已先拿掉，"
+                                         "請確認要歸給哪一列", rid=lr, table=spec.left, ref=spec.name))
             rows_json.append({"left": lr, **decision})
 
         self._build_match_table(box, spec, left_rids, decided, where)
@@ -435,7 +440,10 @@ class _Run:
             [rid for rid in right_rids if rid not in {r for d in decided.values() for r in d["rights"]}]
         pair_total = sum(len(d["rights"]) for d in decided.values())
         self.matches.append({
-            "name": spec.name, "left": spec.left, "right": spec.right, "mode": spec.mode, "multi": spec.multi,
+            "name": spec.name, "label": label, "left": spec.left, "right": spec.right,
+            "left_label": self.recipe.table_label(spec.left), "right_label": right_label,
+            "left_title": self._title_columns(spec.left), "right_title": self._title_columns(spec.right),
+            "mode": spec.mode, "multi": spec.multi,
             "mode_label": MODES[spec.mode].split("：")[0], "rows_mode": spec.rows,
             "strategies": [s.label for s in spec.strategies], "counts": counts, "pairs": pair_total,
             "rows": rows_json, "show": self._show_columns(spec),
@@ -444,7 +452,7 @@ class _Run:
             "unused_right": sorted(unused, key=_rid_order)})
         status = "review" if counts["ambiguous"] or counts["review"] or (
             counts["unmatched"] and spec.unmatched == "flag") else None
-        self.stage("match", f"{spec.name}（{MODES[spec.mode].split('：')[0]}）{len(left_rids)} 列", status)
+        self.stage("match", f"{label}（{MODES[spec.mode].split('：')[0]}）{len(left_rids)} 列", status)
         for line in stats:
             self.stage("match", "　" + line)
         if counts["manual"] or counts["none"]:
@@ -452,7 +460,7 @@ class _Run:
         if counts["unmatched"]:
             self.stage("match", f"　找不到 {counts['unmatched']} 列")
         if unused:
-            self.stage("match", f"　{spec.right} 沒用到 {len(unused)} 列")
+            self.stage("match", f"　{right_label}沒用到 {len(unused)} 列")
 
     @staticmethod
     def _decide_single(grouped: dict[str, list[tuple]], strategy) -> dict[str, dict]:
@@ -535,6 +543,18 @@ class _Run:
                 f"CREATE TABLE {quote(spec.name)} AS SELECT l.*{brought}, p.rr AS {rid}, p.how AS {how}, "
                 f"p.status AS {status} FROM {quote(spec.left)} l JOIN __pairs p ON p.lr = l._rid "
                 f"LEFT JOIN {quote(spec.right)} r ON r._rid = p.rr {drop} ORDER BY p.seq, p.rr", where)
+
+    def _title_columns(self, table: str) -> list[str]:
+        """辨識一列用的欄位（顯示名稱）：recipe 的 title；沒寫時用第一個必填的文字欄位。"""
+        spec = self.recipe.inputs.get(table)
+        if spec is None:
+            for match in self.recipe.match:
+                if match.name == table:
+                    return self._title_columns(match.left)
+            return []
+        labels = self.labels.get(table, {})
+        names = spec.title or [next((c.name for c in spec.columns.values() if c.required and c.type == "text"), "")]
+        return [labels.get(n, n) for n in names if n]
 
     def _show_columns(self, spec) -> dict[str, list[str]]:
         """配對畫面先顯示的欄位：recipe 的 show，沒寫就用比對條件裡出現的欄位。顯示名稱用實際表頭。"""

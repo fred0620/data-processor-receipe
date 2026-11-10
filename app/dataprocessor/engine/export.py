@@ -111,7 +111,7 @@ def export(result: dict, path: Path) -> Path:
         r = 2
         for match in result["matches"]:
             for row in match["rows"]:
-                values = [match["name"], row["left"], MATCH_STATUS.get(row["status"], row["status"]), row["how"],
+                values = [match.get("label", match["name"]), row["left"], MATCH_STATUS.get(row["status"], row["status"]), row["how"],
                           "、".join(row["rights"]), "、".join(c["rid"] for c in row["candidates"])
                           if row["status"] == "ambiguous" else ""]
                 for c, value in enumerate(values, 1):
@@ -119,7 +119,7 @@ def export(result: dict, path: Path) -> Path:
                         _text(sheet.cell(row=r, column=c), value)
                 r += 1
             for rid in match["unused_right"]:
-                for c, value in enumerate([match["name"], "", "右表沒被用到", "", rid, ""], 1):
+                for c, value in enumerate([match.get("label", match["name"]), "", "右表沒被用到", "", rid, ""], 1):
                     if value:
                         _text(sheet.cell(row=r, column=c), value)
                 r += 1
