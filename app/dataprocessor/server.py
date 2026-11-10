@@ -123,7 +123,7 @@ def _missing(exc):
 
 @app.errorhandler(ValueError)
 def _bad_value(exc):
-    log.info("輸入不正確 path=%s：%s", log_text(request.path), log_text(exc, 300))
+    log.info("輸入不正確 path=%s", log_text(request.path))   # 訊息可能含使用者輸入的值，不寫進日誌
     return _error(str(exc))
 
 
