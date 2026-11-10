@@ -31,6 +31,7 @@ bash run.sh                                # 或 Windows 雙擊 run.bat，用使
 | 改了使用手冊或換版說明後重建 HTML | `uv run --project app python scripts/build_manual.py` |
 | 新增套件 | `uv add --project app 套件名稱` |
 | 試打包（不含離線套件） | `uv run --project app python scripts/build_release.py` |
+| 換版與退回測試（Windows） | `uv run --project app python tests\release\make_versions.py $env:TEMP\dp-release`，再執行 `powershell -ExecutionPolicy Bypass -File tests\release\test_update.ps1 $env:TEMP\dp-release` |
 
 規則：
 
@@ -40,6 +41,7 @@ bash run.sh                                # 或 Windows 雙擊 run.bat，用使
 - 改到核心邏輯時，用自己電腦上的真實樣本跑一次，和上一版的結果比對。真實樣本不進版控。
 - 要發布新的資料夾或檔案時，加進 `scripts/build_release.py` 的清單；沒列的不會進發布包。
 - 新增套件時，也加進 `__main__.py` 的 doctor 檢查。
+- 改到 `app/launcher.ps1`（尤其換版與退回）時，一定要讓換版測試通過。它在 Windows PowerShell 5.1 上用有空白和中文的資料夾，實際跑更新、退回、壞掉的 ZIP、檔案被鎖住，確認 workspace 不會被動到、失敗時能用原本的版本、也不會弄丟可以退回的上一版。推到 GitHub 時會自動在 Windows 上跑（`.github/workflows/windows.yml`）；GitLab 打標籤時也會跑（需要 Windows runner）。
 
 ## 3. 發布新版
 

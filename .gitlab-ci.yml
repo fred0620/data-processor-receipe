@@ -17,6 +17,22 @@ test:
     - uv lock --project app --check
     - uv run --project app pytest tests -q
 
+# 換版與退回在 Windows PowerShell 5.1 上實際跑一次。需要 Windows runner：
+# gitlab.com 用下面的 tag；公司自架的 GitLab 請換成自己的 Windows runner tag。
+update-test:
+  stage: test
+  tags: [saas-windows-medium-amd64]
+  image: null
+  cache: []
+  script:
+    - powershell -NoProfile -Command "irm https://astral.sh/uv/install.ps1 | iex"
+    - $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+    - $work = Join-Path $env:TEMP "dp-release"
+    - uv run --project app python tests\release\make_versions.py $work
+    - powershell -NoProfile -ExecutionPolicy Bypass -File tests\release\test_update.ps1 $work
+  rules:
+    - if: $CI_COMMIT_TAG          # 發布前一定要通過
+
 audit:
   stage: audit
   script:

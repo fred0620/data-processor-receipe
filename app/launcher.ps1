@@ -9,7 +9,7 @@
 # 更新方式：從 GitLab Release 下載 data-processor-版本.zip，不用解壓，放進這個資料夾，
 # 雙擊 run.bat 就會詢問要不要安裝。程式不會連網檢查新版。
 #   run.bat rollback            退回上一版（再執行一次就回到新版）
-#   加上 --no-update 可以跳過開啟前的新版檢查
+#   加上 --no-update 可以跳過開啟前的新版檢查；update 加上 --yes 不詢問直接安裝（批次部署與自動測試用）
 #
 # 資料夾分工：app\ 是程式，更新時整包換掉；workspace\ 是使用者資料，更新不會動；
 # runtime\ 放 uv、Python 和套件，壞掉時可以整個刪掉，下次啟動會重建。
@@ -47,8 +47,11 @@ $env:UV_NO_PROGRESS = "1"
 
 $rest = @()
 $skipUpdate = $false
+$assumeYes = $false
 foreach ($arg in $args) {
-    if ($arg -eq "--no-update") { $skipUpdate = $true } else { $rest += $arg }
+    if ($arg -eq "--no-update") { $skipUpdate = $true }
+    elseif ($arg -eq "--yes") { $assumeYes = $true }
+    else { $rest += $arg }
 }
 $command = if ($rest.Count -gt 0) { [string]$rest[0] } else { "" }
 $interactive = ($command -eq "")    # 雙擊開啟時才暫停顯示錯誤，指令列批次不會卡住
@@ -92,14 +95,22 @@ function Install-Update([string]$version, [string]$zipPath) {
     if (-not $newApp) { throw "ZIP 內容不完整，找不到 app 資料夾" }
     if ((Get-AppVersion $newApp.FullName) -ne $version) { throw "ZIP 裡的版本和檔名不符" }
 
-    # 先把舊版改名保留，新版到位後才算完成；中途失敗就換回原狀
+    # 先把舊版改名保留，新版到位後才算完成；中途失敗就換回原狀。
+    # 原本的 app.old 先移到 updates 裡，失敗時放回去，不會因為一次失敗的更新就失去可以退回的版本
     $old = Join-Path $Root "app.old"
-    Remove-Item -Recurse -Force $old -ErrorAction SilentlyContinue
-    Rename-WithRetry $AppDir "app.old"
+    $previous = Join-Path $updates "app.old.previous"
+    if (Test-Path -LiteralPath $old) { Move-Item -LiteralPath $old -Destination $previous }
+    try {
+        Rename-WithRetry $AppDir "app.old"
+    } catch {
+        if (Test-Path -LiteralPath $previous) { Move-Item -LiteralPath $previous -Destination $old }
+        throw
+    }
     try {
         Move-Item -LiteralPath $newApp.FullName -Destination (Join-Path $Root "app")
     } catch {
         Rename-WithRetry $old "app"
+        if (Test-Path -LiteralPath $previous) { Move-Item -LiteralPath $previous -Destination $old }
         throw
     }
     foreach ($name in @("run.bat", "run.sh")) {
@@ -137,8 +148,10 @@ function Update-App([bool]$report) {
     if (-not $update) { return $false }
     Write-Host ""
     Write-Host "找到新版本 $($update.version)（目前 $(Get-AppVersion $AppDir)）" -ForegroundColor Cyan
-    $answer = Read-Host "要現在更新嗎？workspace 裡的資料不會受影響 [Y/n]"
-    if ($answer -match '^(n|no|否)$') { return $false }
+    if (-not $assumeYes) {
+        $answer = Read-Host "要現在更新嗎？workspace 裡的資料不會受影響 [Y/n]"
+        if ($answer -match '^(n|no|否)$') { return $false }
+    }
     try {
         Install-Update $update.version $update.path | Out-Null  # 有些指令會輸出物件，不能混進回傳值
         Remove-Item -LiteralPath $update.path -ErrorAction SilentlyContinue
