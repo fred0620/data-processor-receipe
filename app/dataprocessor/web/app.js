@@ -96,6 +96,7 @@ const state = {
   tab: "rows", filter: "review", search: "", selected: null, stageOpen: null,
   matchName: null, matchFilter: "todo", matchSearch: "", pickerFor: null, matchFocus: null, matchAll: false,
   issueFilter: "review", checked: new Set(),
+  traces: {}, openTrace: new Set(),   // 執行紀錄：好奇時才向程式要，要過的先記著
 };
 const LEVEL_TEXT = { review: "需檢查", notice: "提示", error: "無法執行" };
 const STAGE_TEXT = { load: "Load", gate: "Gate", normalize: "Normalize", match: "Match", transform: "Transform", validate: "Validate", mapping: "Mapping", export: "Export" };
@@ -143,16 +144,26 @@ function renderRecipes() {
   updateRunButton();
 }
 
-/* recipe 的白話說明：由程式依 recipe 產生，和實際執行的邏輯一致，讓人不用讀 YAML 也能檢查 */
+/* recipe 的邏輯說明：由程式依 recipe 產生，和實際執行的邏輯一致。
+   以一列資料為主角，依序寫出會經過的判斷；其他資料表的讀法放在後面。 */
+function explainNode(node, index = null) {
+  const code = node.code ? el("details", { class: "explain-code" }, el("summary", { text: "SQL 原文" }), el("pre", { text: node.code })) : null;
+  const children = node.children.length ? el("ul", { class: "flow-children" }, node.children.map((child) => explainNode(child))) : null;
+  if (node.kind === "detail") {
+    return el("li", { class: "flow-detail" }, el("details", {}, el("summary", { text: node.text }), children));
+  }
+  return el("li", { class: `flow-${node.kind}` },
+    index !== null ? el("span", { class: "flow-index", text: index }) : null,
+    el("div", { class: "flow-body" }, el("div", { class: "flow-text", text: node.text }), children, code));
+}
+
 function explainView(data) {
   return el("div", { class: "explain" },
     data.description ? el("p", { class: "explain-lead", text: data.description }) : null,
-    data.sections.map((section) => el("section", {},
-      el("h4", { text: section.title }),
-      el("ul", {}, section.items.map((item) => el("li", {},
-        el("div", { text: item.text }),
-        item.sub.length ? el("ul", { class: "explain-sub" }, item.sub.map((line) => el("li", { text: line }))) : null,
-        item.code ? el("details", { class: "explain-code" }, el("summary", { text: "SQL 原文" }), el("pre", { text: item.code })) : null))))));
+    el("h4", { text: `每一列${data.subject}會經過` }),
+    el("ol", { class: "flow" }, data.flow.map((node, i) => explainNode(node, i + 1))),
+    data.sources.length ? [el("h4", { text: "其他資料表怎麼讀" }),
+      el("ul", { class: "flow" }, data.sources.map((node) => explainNode(node)))] : null);
 }
 
 async function viewRecipe(recipe) {
@@ -282,6 +293,7 @@ async function act(path, body) {
 
 function setResult(result, fresh = false) {
   state.result = result;
+  state.traces = {};
   if (fresh) {
     state.tab = result.status === "error" ? "issues" : "rows";
     state.filter = result.counts.review ? "review" : "all";
@@ -490,16 +502,57 @@ function renderDrawer() {
       if (String(input.value) !== String(row.values[c.name] ?? "")) act("edit", { rid: row.rid, column: c.name, value: input.value });
     });
     const flagged = cellIssues(row, c.name).some((i) => i.level === "review");
+    const traceKey = `${row.rid}\u0000${c.name}`;
+    const open = state.openTrace.has(traceKey);
     const hint = c.name in row.edited ? el("div", { class: "hint" }, `原值：${row.edited[c.name] ?? "（空白）"}　`,
       el("button", { type: "button", class: "link", text: "還原", onclick: () => act("edit", { rid: row.rid, column: c.name, revert: true }) })) : null;
-    return el("div", { class: `field${flagged ? " flag-review" : ""}` }, el("label", { text: c.name, title: c.name }), input, hint);
+    const why = el("button", {
+      type: "button", class: `link why${open ? " open" : ""}`, text: open ? "收起" : "怎麼來的",
+      onclick: () => { open ? state.openTrace.delete(traceKey) : state.openTrace.add(traceKey); renderDrawer(); },
+    });
+    const story = open ? traceList(row, (t) => t.columns[c.name]) : null;
+    return el("div", { class: `field${flagged ? " flag-review" : ""}` },
+      el("div", { class: "field-label" }, el("label", { text: c.name, title: c.name }), why), input, hint, story);
+  });
+  const rowKey = `${row.rid}\u0000*`;
+  const rowStory = el("details", { class: "row-trace", open: state.openTrace.has(rowKey) },
+    el("summary", { text: "這一列的處理過程" }), state.openTrace.has(rowKey) ? traceList(row, (t) => t.steps) : null);
+  rowStory.addEventListener("toggle", () => {
+    if (rowStory.open === state.openTrace.has(rowKey)) return;
+    rowStory.open ? state.openTrace.add(rowKey) : state.openTrace.delete(rowKey);
+    renderDrawer();
   });
   put($("drawerBody"),
     issues.length ? el("section", {}, el("h4", { class: "section-title", text: "需要注意" }), el("div", { class: "list" }, issues.map((i) => issueLine(i)))) : null,
     el("section", {}, el("h4", { class: "section-title", text: "欄位" }), el("p", { class: "muted small-text", style: "margin:-4px 0 10px", text: "修改後按 Enter，會保留原值。" }), fields),
+    el("section", {}, rowStory),
     el("section", {}, el("h4", { class: "section-title", text: "來源" }),
       el("dl", { class: "kv" }, row.sheet ? [el("dt", { text: "工作表" }), el("dd", { text: row.sheet })] : null,
         el("dt", { text: "Excel 列" }), el("dd", { text: row.row ?? "" }), el("dt", { text: "列代號" }), el("dd", { text: row.rid }))));
+}
+
+/* 執行紀錄：要看的時候才向程式要，同一次執行內記著不重複要 */
+function traceList(row, pick) {
+  const box = el("ol", { class: "trace" });
+  /* 「　」開頭的是上一步的補充，併進同一點，編號才會連續 */
+  const fill = (data) => {
+    const items = [];
+    for (const line of pick(data) || []) {
+      if (line.startsWith("　") && items.length) items[items.length - 1].push(line.trim());
+      else items.push([line.trim()]);
+    }
+    put(box, items.map(([head, ...rest]) => el("li", {}, head, rest.map((more) => el("div", { class: "sub", text: more })))));
+  };
+  const cached = state.traces[row.rid];
+  if (cached) {
+    fill(cached);
+  } else {
+    put(box, el("li", { class: "muted", text: "讀取中…" }));
+    api(`/api/runs/${state.result.run_id}/trace?rid=${encodeURIComponent(row.rid)}`)
+      .then((data) => { state.traces[row.rid] = data; fill(data); })
+      .catch((error) => put(box, el("li", { class: "muted", text: error.message })));
+  }
+  return box;
 }
 
 /* ---------- 配對 ---------- */

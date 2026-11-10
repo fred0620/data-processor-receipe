@@ -29,7 +29,7 @@ _FUNCTIONS = [
 ]
 _WORDS = [
     (r"\bIS\s+NOT\s+NULL\b", "不是空白"), (r"\bIS\s+NULL\b", "是空白"), (r"\bNOT\s+LIKE\b", "不包含"),
-    (r"\bLIKE\b", "符合"), (r"\bNOT\s+IN\b", "不在"), (r"\bIN\b", "在"), (r"\bAND\b", "且"), (r"\bOR\b", "或"),
+    (r"\bLIKE\b", "符合"), (r"\bNOT\s+IN\b", "不在"), (r"\bIN\b", "在"), (r"\bAND\b", "\x01且\x01"), (r"\bOR\b", "\x01或\x01"),
     (r"\bNOT\b", "不是"), (r"\bCASE\s+WHEN\b", "如果"), (r"\bWHEN\b", "如果"), (r"\bTHEN\b", "就是"),
     (r"\bELSE\b", "否則"), (r"\bEND\b", ""), (r"<>|!=", "≠"), (r">=", "≥"), (r"<=", "≤"),
 ]
@@ -99,7 +99,9 @@ def humanize(sql: str, names: _Names, left: str | None = None, right: str | None
         return f"「{value}」" if value else "空白"
 
     text = re.sub(r"\x00(\d+)\x00", restore, text)
-    return " ".join(text.split())
+    text = " ".join(text.split())
+    text = re.sub(r"(?<=[\u4e00-\u9fff」）])\s+|\s+(?=[\u4e00-\u9fff「（])", "", text)  # 中文之間不留空白
+    return text.replace("\x01", " ").replace("  ", " ").strip()
 
 
 def _pairs(on: str, names: _Names, left: str, right: str) -> str | None:
@@ -112,130 +114,176 @@ def _pairs(on: str, names: _Names, left: str, right: str) -> str | None:
                     for a, b in pairs)
 
 
-def _item(text: str, code: str | None = None, sub: list[str] | None = None) -> dict:
-    return {"text": text, "code": code, "sub": sub or []}
+def _node(text: str, kind: str = "step", children: list | None = None, code: str | None = None) -> dict:
+    """說明裡的一個節點。kind：step（步驟）、if（如果）、then（結果）、else（否則）、note（補充）、detail（預設收起來的細節）。"""
+    return {"text": text, "kind": kind, "children": children or [], "code": code}
+
+
+def _main_input(recipe: Recipe) -> str:
+    """說明的主角：第一個配對最左邊的輸入表；沒有配對時是第一張輸入表。"""
+    if recipe.match:
+        table = recipe.match[0].left
+        names = {m.name: m for m in recipe.match}
+        while table in names:
+            table = names[table].left
+        if table in recipe.inputs:
+            return table
+    return next(iter(recipe.inputs))
+
+
+def _reading(recipe: Recipe, table: str, names: _Names, main: bool = False) -> list[dict]:
+    """一張輸入表怎麼讀：只把值得注意的規則列出來，其他欄位收在細節裡。"""
+    spec = recipe.inputs[table]
+    if spec.sheets:
+        where = f"讀取所有名稱符合 {'、'.join(spec.sheets)} 的工作表，疊成一張表"
+    elif spec.sheet:
+        where = f"從工作表「{'」或「'.join(spec.sheet)}」讀取"
+    else:
+        where = "在所有工作表裡找符合的表頭"
+    if spec.sheet_column:
+        part = "工作表名稱" if spec.sheet_column.regex is None else f"工作表名稱中符合 {spec.sheet_column.regex.pattern} 的部分"
+        where += f"，{part}放進「{spec.sheet_column.name}」"
+    nodes = [_node(where, "note")]
+    plain = []
+    for column in spec.columns.values():
+        label = column.aliases[0] if column.source is None else column.name
+        if column.extract:
+            branches = []
+            for i, rule in enumerate(column.extract):
+                text = _rule_text(rule)
+                branches.append(_node(("先" if i == 0 else "找不到時改") + f"取{text}", "then" if i == 0 else "else"))
+            branches.append(_node("都取不到 → 留空" + ("並標記需檢查" if column.required else ""), "else"))
+            origin = f"從「{spec.columns[column.source].aliases[0]}」這一格" if column.source else ""
+            nodes.append(_node(f"「{label}」{origin}只取一部分", "step", branches))
+        elif column.map:
+            mapping = recipe.mappings[column.map]
+            nodes.append(_node(f"「{label}」查對照表 {column.map}", "step", [
+                _node("查得到 → 換成對應值", "then"),
+                _node(f"查不到 → {MISSING_LABELS[mapping.missing]}", "else")]))
+        elif column.type in ("number", "integer") and (column.decimal == "," or column.strip):
+            extra = "小數點是逗號（1.000,02）" if column.decimal == "," else f"去掉 {'、'.join(column.strip)} 再讀"
+            nodes.append(_node(f"「{label}」當數字讀，{extra}；讀不懂 → 留空並標記需檢查", "note"))
+        else:
+            plain.append(column)
+    required = [c.aliases[0] for c in spec.columns.values() if c.required and c.source is None]
+    if required:
+        nodes.append(_node(f"必填欄位：{'、'.join(required)}；空白 → 標記需檢查", "note"))
+    if main:
+        nodes.append(_node("數字、日期讀不懂時（例如「約 300」）一律留空並標記，原始內容保留給你看，不猜測", "note"))
+    nodes.append(_node(f"所有欄位的讀法（{len(spec.columns)} 欄）", "detail",
+                       [_node(_column_text(c, spec, recipe), "note") for c in spec.columns.values()]))
+    return nodes
+
+
+def _rule_text(rule) -> str:
+    steps = []
+    if rule.line is not None:
+        steps.append(f"第 {rule.line} 行" if rule.line > 0 else f"倒數第 {-rule.line} 行")
+    if rule.after:
+        steps.append(f"「{'」或「'.join(rule.after)}」之後")
+    if rule.before:
+        steps.append(f"「{'」或「'.join(rule.before)}」之前")
+    if rule.regex is not None:
+        steps.append(f"符合 {rule.regex.pattern} 的部分")
+    return "、".join(steps)
+
+
+def _gates(recipe: Recipe, table: str, names: _Names) -> list[dict]:
+    return [_node(f"只留下：{humanize(g.keep, names, g.input)}", "if",
+                  [_node(f"其他列 → 排除，不處理（{g.label}）", "else")], g.keep)
+            for g in recipe.gate if g.input == table]
+
+
+def _matching(recipe: Recipe, match, names: _Names) -> dict:
+    left, right = names.table(match.left), names.table(match.right)
+    children = []
+    for i, strategy in enumerate(match.strategies):
+        condition = _pairs(strategy.on, names, match.left, match.right) or humanize(strategy.on, names, match.left, match.right)
+        head = ("先找" if i == 0 else "再找") + f"：{condition}"
+        if strategy.when:
+            head += f"（只在{humanize(strategy.when, names, match.left, match.right)}時）"
+        outcomes = []
+        if match.multi:
+            outcomes.append(_node("找到幾筆就全部算進來", "then"))
+        else:
+            outcomes.append(_node("找到 1 筆 → 配對", "then"))
+            if strategy.best:
+                outcomes.append(_node(f"找到多筆 → 挑「{humanize(strategy.best, names, match.left, match.right)}」最高的；"
+                                      "分不出高下時請你選", "then"))
+            else:
+                outcomes.append(_node("找到多筆 → 不自動挑，請你選", "then"))
+        if strategy.review:
+            outcomes.append(_node("用這個方式配到的，要你確認", "note"))
+        code = strategy.on + (f"\n-- when: {strategy.when}" if strategy.when else "") + (
+            f"\n-- best: {strategy.best}" if strategy.best else "")
+        pairs_only = _pairs(strategy.on, names, match.left, match.right) is not None and not strategy.when and not strategy.best
+        children.append(_node(head, "if", outcomes, None if pairs_only else code))  # 欄位配對已經完整翻出來，不用附原文
+    children.append(_node(f"都找不到 → {UNMATCHED_LABELS[match.unmatched]}", "else"))
+    if match.mode in ("one_to_one", "one_to_many"):
+        children.append(_node(f"同一筆{right}只能給一筆{left}；同時對到好幾筆時不替你決定，請你選", "note"))
+    if match.multi:
+        children.append(_node(f"對到多筆{right}時，" + ("彙總成一列" if match.rows == "combine" else "每一筆各成一列"), "note"))
+    if match.bring:
+        if match.rows == "combine":
+            brought = "、".join(f"「{alias}」= {humanize(expr, names, None, match.right)}" for alias, expr in match.bring.items())
+        else:
+            brought = "、".join(names.column(match.right, src) for src in match.bring.values())
+        children.append(_node(f"配到後帶入{right}的：{brought}", "note"))
+    else:
+        children.append(_node(f"配到後帶入{right}的所有欄位", "note"))
+    label = names.table(match.name)
+    return _node(f"找對應的{right}（{label}，{MODES[match.mode].split('：')[0]}）", "step", children)
 
 
 def explain(recipe: Recipe) -> dict:
+    """把 recipe 寫成「一列資料會經過哪些判斷」的流程，另外列出其他資料表的讀法。"""
     names = _Names(recipe)
-    sections = []
-
-    # ---------- 讀取 ----------
-    items = []
-    for name, spec in recipe.inputs.items():
-        if spec.sheets:
-            where = f"讀取所有名稱符合 {'、'.join(spec.sheets)} 的工作表，疊成一張表"
-        elif spec.sheet:
-            where = f"從工作表「{'」或「'.join(spec.sheet)}」讀取"
-        else:
-            where = "在所有工作表裡找符合的表頭"
-        if spec.header_row:
-            where += f"，表頭在第 {spec.header_row} 列"
-        if spec.sheet_column:
-            part = "工作表名稱" if spec.sheet_column.regex is None else f"工作表名稱中符合 {spec.sheet_column.regex.pattern} 的部分"
-            where += f"；{part}放進「{spec.sheet_column.name}」"
-        sub = []
-        for column in spec.columns.values():
-            sub.append(_column_text(column, spec, recipe))
-        items.append(_item(f"{spec.label}：{where}", sub=sub))
-    sections.append({"title": "讀取資料", "items": items})
-
-    # ---------- 篩選 ----------
-    if recipe.gate:
-        sections.append({"title": "篩選", "items": [
-            _item(f"{names.table(g.input)}：{g.label}。只留下符合這個條件的列：{humanize(g.keep, names, g.input)}",
-                  g.keep) for g in recipe.gate]})
-
-    # ---------- 對照表 ----------
-    if recipe.mappings:
-        items = []
-        for name, spec in recipe.mappings.items():
-            sub = [f"{target} ← {'、'.join(variants) if variants else '（只對應自己）'}" for target, variants in spec.entries.items()]
-            for value in spec.values or []:
-                if value not in spec.entries:
-                    sub.append(f"{value} ← （只對應自己）")
-            head = f"{name}：" + (f"只能對應到 {'、'.join(spec.values)}；" if spec.values else "")
-            head += f"找不到時{MISSING_LABELS[spec.missing]}。比對時不分全半形、大小寫、空白與標點"
-            used = [f"{names.table(t)}「{names.column(t, c.name)}」" for t, s in recipe.inputs.items()
-                    for c in s.columns.values() if c.map == name]
-            used += [f"輸出「{c.name}」" for c in recipe.output.columns if c.map == name]
-            if used:
-                head += f"。用在：{'、'.join(used)}"
-            items.append(_item(head, sub=sub))
-        sections.append({"title": "對照表", "items": items})
-
-    # ---------- 配對 ----------
+    main = _main_input(recipe)
+    main_label = names.table(main)
+    flow = [_node(f"讀進{main_label}", "step", _reading(recipe, main, names, main=True))]
+    gates = _gates(recipe, main, names)
+    if gates:
+        flow.append(_node("篩選", "step", gates))
     for match in recipe.match:
-        left, right = names.table(match.left), names.table(match.right)
-        mode = MODES[match.mode]
-        items = [_item(f"拿每一列{left}去找對應的{right}。{mode}。")]
-        for i, strategy in enumerate(match.strategies, 1):
-            condition = _pairs(strategy.on, names, match.left, match.right) or humanize(strategy.on, names, match.left, match.right)
-            sub = [f"條件：{condition}"]
-            if strategy.when:
-                sub.append(f"只用在：{humanize(strategy.when, names, match.left, match.right)}")
-            if strategy.best:
-                sub.append(f"找到多筆時，挑「{humanize(strategy.best, names, match.left, match.right)}」最高的那一筆；分不出高下時請人選")
-            elif not match.multi:
-                sub.append("找到多筆時不自動挑，請人選")
-            if strategy.review:
-                sub.append("用這個方式配到的，要人確認")
-            code = strategy.on + (f"\n-- when: {strategy.when}" if strategy.when else "") + (
-                f"\n-- best: {strategy.best}" if strategy.best else "")
-            items.append(_item(f"第 {i} 種方式：{strategy.label}" + ("（前面的方式都找不到時才用）" if i > 1 else ""), code, sub))
-        if match.bring:
-            if match.rows == "combine":
-                brought = [f"「{alias}」= {humanize(expr, names, None, match.right)}" for alias, expr in match.bring.items()]
-                items.append(_item(f"對到的多筆{right}彙總成一列，帶入：", sub=brought))
-            else:
-                brought = "、".join(names.column(match.right, src) for src in match.bring.values())
-                items.append(_item(f"配到後從{right}帶入：{brought}"))
-        elif match.multi and match.rows == "expand":
-            items.append(_item(f"配到多筆時，每一筆{right}各成一列，帶入{right}的所有欄位"))
-        else:
-            items.append(_item(f"配到後帶入{right}的所有欄位"))
-        if match.multi and match.rows == "expand" and match.bring:
-            items.append(_item(f"一列{left}配到多筆{right}時，每一筆各成一列"))
-        items.append(_item(f"所有方式都找不到時：{UNMATCHED_LABELS[match.unmatched]}"))
-        sections.append({"title": f"配對：{names.table(match.name)}", "items": items})
-
-    # ---------- 計算 ----------
-    if recipe.transform:
-        sections.append({"title": "計算", "items": [
-            _item(f"{step.name}" + (f"：{step.note}" if step.note else "") + "（以 SQL 計算，原文如下）", step.sql)
-            for step in recipe.transform]})
-
-    # ---------- 驗證 ----------
+        flow.append(_matching(recipe, match, names))
+    for step in recipe.transform:
+        flow.append(_node(f"計算：{step.note or step.name}", "step",
+                          [_node("以 SQL 計算，原文可展開查看", "note")], step.sql))
     if recipe.validate:
-        items = []
-        for check in recipe.validate:
-            table = check.table or recipe.output.source
-            sub = [f"條件：{humanize(check.where, names, table)}"]
-            if check.highlight:
-                sub.append(f"標在：{'、'.join(check.highlight)}")
-            items.append(_item(f"{check.message}（{LEVEL_LABELS[check.level]}）", check.where, sub))
-        sections.append({"title": "驗證", "items": items})
-
-    # ---------- 輸出 ----------
-    sub = []
+        flow.append(_node("檢查", "step", [
+            _node(f"如果{humanize(c.where, names, c.table or recipe.output.source)}", "if",
+                  [_node(f"標記「{c.message}」（{LEVEL_LABELS[c.level]}" + (f"，標在 {'、'.join(c.highlight)}" if c.highlight else "")
+                         + "）", "then")], c.where)
+            for c in recipe.validate]))
+    outputs = []
+    for column in recipe.output.columns:
+        if column.map:
+            mapping = recipe.mappings[column.map]
+            outputs.append(_node(f"「{column.name}」查對照表 {column.map}", "step", [
+                _node("查得到 → 換成對應值", "then"), _node(f"查不到 → {MISSING_LABELS[mapping.missing]}", "else")]))
+    required = [c.name for c in recipe.output.columns if c.required]
+    if required:
+        outputs.append(_node(f"必填：{'、'.join(required)}；空白 → 標記需檢查", "note"))
+    detail = []
     for column in recipe.output.columns:
         source = column.expr.strip('"') if column.expr.startswith('"') else None
         origin = (f"來自「{names.column(recipe.output.source, source)}」" if source
                   else f"計算：{humanize(column.expr, names, recipe.output.source)}")
-        notes = [TYPE_LABELS[column.type]] if column.type != "text" else []
-        if column.map:
-            notes.append(f"套用對照表 {column.map}")
-        if column.required:
-            notes.append("必填")
-        if not column.editable:
-            notes.append("不能修改")
-        sub.append(f"{column.name}：{origin}" + (f"（{'、'.join(notes)}）" if notes else ""))
-    head = f"輸出到工作表「{recipe.output.sheet}」，共 {len(recipe.output.columns)} 欄"
+        detail.append(_node(f"{column.name}：{origin}", "note"))
+    head = f"輸出 {len(recipe.output.columns)} 欄到工作表「{recipe.output.sheet}」"
     if recipe.output.order_by:
-        head += f"，依 {humanize(recipe.output.order_by, names, recipe.output.source)} 排序"
-    sections.append({"title": "輸出", "items": [_item(head, sub=sub)]})
+        head += f"，依{humanize(recipe.output.order_by, names, recipe.output.source)}排序"
+    outputs.append(_node("每一欄的來源", "detail", detail))
+    flow.append(_node(head, "step", outputs))
 
-    return {"name": recipe.name, "description": recipe.description, "sections": sections}
+    sources = []
+    for table in recipe.inputs:
+        if table == main:
+            continue
+        nodes = _reading(recipe, table, names) + _gates(recipe, table, names)
+        sources.append(_node(names.table(table), "step", nodes))
+    return {"name": recipe.name, "description": recipe.description, "subject": main_label,
+            "flow": flow, "sources": sources}
 
 
 def _column_text(column, spec, recipe: Recipe) -> str:

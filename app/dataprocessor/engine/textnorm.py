@@ -112,13 +112,17 @@ def _keyword(word: str) -> re.Pattern:
 
 
 def extract(text: str | None, rules) -> str | None:
+    return extract_with_rule(text, rules)[0]
+
+
+def extract_with_rule(text: str | None, rules) -> tuple[str | None, int | None]:
     """依 recipe 的 extract 取值。多個寫法依序嘗試，第一個取得到值的就用；都取不到回傳 None。
     每個寫法依序套用：第幾行 → 關鍵字之後 → 關鍵字之前 → 正規表達式。
     第幾行、after、regex 對不到時，這個寫法就算失敗、換下一個；before 對不到時取到最後。"""
     if text is None:
-        return None
+        return None, None
     base = halfwidth(str(text)).replace("\r\n", "\n").replace("\r", "\n")
-    for rule in rules:
+    for index, rule in enumerate(rules):
         value = base
         if rule.line is not None:
             lines = [line for line in value.split("\n")]
@@ -143,8 +147,8 @@ def extract(text: str | None, rules) -> str | None:
             value = match.group(1) if match.groups() else match.group(0)
         value = value.strip()
         if value:
-            return value
-    return None
+            return value, index
+    return None, None
 
 
 def parse_integer(raw: str | None, strip: list[str] | None = None, decimal: str = ".") -> int | None:

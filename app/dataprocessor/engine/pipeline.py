@@ -17,7 +17,7 @@ from pathlib import Path
 from .recipe import MODES, Column, Mapping, Recipe, RecipeError, quote
 from .review import MappingStore, ReviewStore
 from .sandbox import SQL_TYPES, Sandbox
-from .textnorm import clean_text, extract, halfwidth, key, parse_date, parse_integer, parse_number
+from .textnorm import clean_text, extract_with_rule, halfwidth, key, parse_date, parse_integer, parse_number
 from .workbook import Sheet, cell_text, data_rows, locate
 
 MAX_CANDIDATES = 5     # 左表一列只對一列時，最多列出幾筆候選
@@ -77,6 +77,10 @@ class Mapper:
             self.added[name] = added
         self.unmapped: dict[tuple[str, str], dict] = {}
 
+    def origin(self, name: str, value: str) -> str:
+        """這個對照是 recipe 寫好的，還是使用者在畫面上補的。"""
+        return "你在畫面上補的對照" if key(value) in self.added.get(name, {}) else "recipe 裡的對照"
+
     def lookup(self, name: str, value: str, place: str) -> str | None:
         spec: Mapping = self.specs[name]
         target = self.tables[name].get(key(value))
@@ -109,6 +113,11 @@ class _Run:
         self.blocked = False
         self.current = "load"
         self.labels: dict[str, dict[str, str]] = {}  # 輸入表 → 欄位 → 實際表頭文字（訊息用）
+        self.cells: dict[tuple[str, str], list[str]] = {}   # 執行紀錄：(列代號, 欄位) → 經過
+        self.gate_labels: dict[str, list[str]] = {}         # 輸入表 → 通過的篩選條件
+        self.created: dict[str, tuple[str, str]] = {}       # 計算步驟產生的欄位 → (步驟名稱, 說明)
+        self.check_hits: list[set[str]] = []                # 每條驗證規則標記到的列
+        self.out_trail: dict[tuple[str, str], str] = {}     # 輸出欄位套對照表的經過
         self.upstream = self._plan_edits()             # rid → 輸入欄位 → (輸出欄位, 修改紀錄)
         self.applied: dict[tuple[str, str], object] = {}  # 已在輸入階段套用的修改 (rid, 輸出欄位) → 原值
 
@@ -244,22 +253,37 @@ class _Run:
         return pending
 
     def normalize(self, table: str, column: Column, raw: str | None, rid: str, pending: list[Issue]):
+        """整理一格，同時記下經過（執行紀錄），使用者好奇時可以覆核。"""
+        trail: list[str] = []
+        value = self._normalize(table, column, raw, rid, pending, trail)
+        self.cells[(rid, column.name)] = trail
+        return value
+
+    def _normalize(self, table: str, column: Column, raw: str | None, rid: str, pending: list[Issue], trail: list[str]):
         label = self.labels.get(table, {}).get(column.name, column.name)
 
         def flag(level: str, code: str, message: str) -> None:
             pending.append(Issue(level, "normalize", code, message, rid=rid, table=table, column=column.name))
 
+        source = f"「{self.labels.get(table, {}).get(column.source, column.source)}」這一格" if column.source else "儲存格"
         if raw is None or str(raw).strip() == "":
+            trail.append(f"{source}是空白")
             if column.required:
                 flag("review", "required", f"{label} 是必填欄位，但這列是空白")
+                trail.append("必填 → 標記需檢查")
             return None
+        trail.append(f"{source}原本是「{_short(raw)}」")
         text = str(raw)
         if column.extract:
-            text = extract(text, column.extract)
+            text, index = extract_with_rule(text, column.extract)
             if text is None:   # 這一格沒有要找的內容；有時候有、有時候沒有是正常的，必填時才標記
+                trail.append(f"試了 {len(column.extract)} 種取法都取不到 → 留空")
                 if column.required:
                     flag("review", "extract", f"{label} 在儲存格裡找不到要取的內容（原始內容：{_short(raw)}）")
                 return None
+            way = f"第 {index + 1} 種取法（{_rule_label(column.extract[index])}）" if len(column.extract) > 1 else \
+                _rule_label(column.extract[index])
+            trail.append(f"用{way}取到「{_short(text)}」")
         for pattern, repl in column.replace if column.type != "text" else []:
             text = pattern.sub(repl, text)
         if column.type == "number":
@@ -270,16 +294,27 @@ class _Run:
             value = parse_date(text, column.formats, column.roc)
         else:
             value = clean_text(text, column.text, column.replace)
+            if value is not None and value != text:
+                trail.append(f"整理文字 → 「{_short(value)}」")
             if value is not None and column.map:
                 mapped = self.mapper.lookup(column.map, value, f"{table}.{column.name}")
                 if mapped is None:
-                    return self._missing_map(column.map, value, flag)
+                    kept = self._missing_map(column.map, value, flag)
+                    trail.append(f"查對照表 {column.map}：找不到「{_short(value)}」 → "
+                                 + {"ask": "留空，等你補對照", "keep": "保留原值", "blank": "留空"}[self.recipe.mappings[column.map].missing])
+                    return kept
+                trail.append(f"查對照表 {column.map}：「{_short(value)}」→ {mapped}（{self.mapper.origin(column.map, value)}）")
                 value = mapped
             return value
+        kind = {"number": "數字", "integer": "整數", "date": "日期"}[column.type]
         if value is None:
-            kind = {"number": "數字", "integer": "整數", "date": "日期"}[column.type]
             hint = "；千分位或小數點寫法可能不同，可以在 recipe 設定 decimal" if column.type != "date" and "," in text and "." in text else ""
             flag("review", "parse", f"{label} 無法解析成{kind}，已留空（原始內容：{_short(text)}）{hint}")
+            trail.append(f"讀不懂成{kind} → 留空並標記")
+        else:
+            shown = value.isoformat() if hasattr(value, "isoformat") else _display(value)
+            if shown != str(text).strip():
+                trail.append(f"讀成{kind} → {shown}")
         return value
 
     def _missing_map(self, name: str, value: str, flag) -> str | None:
@@ -307,6 +342,7 @@ class _Run:
                 self.excluded.append({"input": spec.input, "rid": rid, "row": number, "label": spec.label,
                                       "values": self.raw.get(spec.input, {}).get(rid, {})})
             self.inputs[spec.input]["excluded"] += len(rows)
+            self.gate_labels.setdefault(spec.input, []).append(spec.label)
             self.stage("gate", f"{spec.input}：{spec.label}，排除 {len(rows)} 列")
             if rows and len(rows) == self.inputs[spec.input]["rows"]:
                 self.issues.append(Issue("review", "gate", "gate_all", f"{spec.input} 的每一列都被「{spec.label}」排除，"
@@ -573,9 +609,15 @@ class _Run:
     # ---------- Transform、Validate ----------
 
     def transform(self, box: Sandbox) -> None:
+        known = {c for table in [*self.recipe.inputs, *(m.name for m in self.recipe.match)] for c in box.columns(table)}
         for step in self.recipe.transform:
             where = f"transform「{step.name}」"
             box.execute(f"CREATE TABLE {quote(step.name)} AS {step.sql}", where)
+            columns = box.columns(step.name)
+            for column in columns:
+                if column not in known:          # 這一步新算出來的欄位，執行紀錄用
+                    self.created[column] = (step.name, step.note)
+            known |= set(columns)
             self.stage("transform", f"{step.name}：{box.count(step.name)} 列" + (f"（{step.note}）" if step.note else ""))
         if not self.recipe.transform:
             self.stage("transform", "沒有設定計算步驟")
@@ -588,6 +630,7 @@ class _Run:
             if "_rid" not in box.columns(table):
                 raise RecipeError([f"{where}：表 {table} 沒有 _rid 欄位，無法標到是哪一列"])
             rows = box.query(f"SELECT _rid FROM {quote(table)} WHERE COALESCE(({check.where}), FALSE)", where)
+            self.check_hits.append({rid for (rid,) in rows})
             for (rid,) in rows:
                 self.issues.append(Issue(check.level, "validate", f"check{i}", check.message, rid=rid, table=table,
                                          out_columns=list(check.highlight)))
@@ -625,7 +668,8 @@ class _Run:
             if own.get("_rid") and seen.get(rid, 0) > 1:   # 一對多展開後同一個左表列有多列，加上右表列代號區分
                 rid = "|".join([rid, *(str(own[c]) for c in rid_columns if c != "_rid" and own.get(c))])
             record = {"rid": rid, "row": own.get("_row"), "sheet": own.get("_sheet"), "values": {}, "raw": {},
-                      "edited": {}, "issues": []}
+                      "edited": {}, "issues": [], "source": own.get("_rid"),
+                      "links": {c: own[c] for c in rid_columns if c != "_rid" and own.get(c)}}
             cell_issues: list[Issue] = []
             for column, value in zip(spec.columns, row[len(extra):]):
                 record["values"][column.name] = self._output_value(column, value, record, rid, cell_issues)
@@ -730,6 +774,9 @@ class _Run:
         text = value if isinstance(value, str) else cell_text(value)
         if column.map:
             mapped = self.mapper.lookup(column.map, text, column.name)
+            self.out_trail[(rid, column.name)] = (
+                f"查對照表 {column.map}：「{_short(text)}」→ {mapped}（{self.mapper.origin(column.map, text)}）" if mapped is not None
+                else f"查對照表 {column.map}：找不到「{_short(text)}」")
             if mapped is None:
                 record["raw"][column.name] = text
                 kept = self._missing_map(column.map, text, flag)
@@ -773,6 +820,19 @@ def _json(value):
     if isinstance(value, (dt.date, dt.datetime)):
         return value.isoformat()
     return value
+
+
+def _rule_label(rule) -> str:
+    parts = []
+    if rule.line is not None:
+        parts.append(f"第 {rule.line} 行" if rule.line > 0 else f"倒數第 {-rule.line} 行")
+    if rule.after:
+        parts.append(f"「{'」或「'.join(rule.after)}」之後")
+    if rule.before:
+        parts.append(f"「{'」或「'.join(rule.before)}」之前")
+    if rule.regex is not None:
+        parts.append(f"符合 {rule.regex.pattern}")
+    return "、".join(parts)
 
 
 def _short(text, limit: int = 60) -> str:
@@ -819,8 +879,12 @@ def _preview(box: Sandbox, table: str, labels: dict[str, str] | None = None) -> 
     return result
 
 
-def run(recipe: Recipe, sheets: list[Sheet], review: ReviewStore, mappings: MappingStore, scratch: Path) -> dict:
+def run(recipe: Recipe, sheets: list[Sheet], review: ReviewStore, mappings: MappingStore, scratch: Path,
+        keep: dict | None = None) -> dict:
+    """執行 recipe。keep 有傳時，把執行紀錄留在 keep["job"]，之後覆核某一列時用。"""
     job = _Run(recipe, review, mappings)
+    if keep is not None:
+        keep["job"] = job
     box = Sandbox(scratch)
     try:
         try:

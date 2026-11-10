@@ -26,6 +26,7 @@ from werkzeug.exceptions import HTTPException
 
 from . import __version__, engine, logs, paths
 from .engine.explain import explain
+from .engine.trace import trace
 from .engine.export import export as export_excel
 from .engine.recipe import RECIPE_ID
 from .engine.review import MappingStore, ReviewStore
@@ -407,13 +408,14 @@ def _execute(run_id: str) -> dict:
     _jobs[run_id] = {"finished": False}
     started = time.time()
     try:
+        keep: dict = {}
         with _run_lock:
-            result = engine.run(recipe, workbook["sheets"], review, mappings, paths.SCRATCH)
+            result = engine.run(recipe, workbook["sheets"], review, mappings, paths.SCRATCH, keep)
     finally:
         _jobs[run_id]["finished"] = True
     result["run_id"] = run_id
     result["workbook"] = {"id": record["workbook"], "name": workbook["name"]}
-    record.update(result=result, review=review)
+    record.update(result=result, review=review, job=keep.get("job"))   # job 是執行紀錄，覆核某一列時用
     log.info("執行 run=%s recipe=%s status=%s rows=%d issues=%d seconds=%.1f", run_id, log_text(recipe.id),
              result["status"], len(result["output"]["rows"]), result["counts"]["review"], time.time() - started)
     return result
@@ -454,6 +456,16 @@ def _run_record(run_id: str) -> dict:
 @app.get("/api/runs/<run_id>")
 def get_run(run_id):
     return jsonify(_run_record(run_id)["result"])
+
+
+@app.get("/api/runs/<run_id>/trace")
+def row_trace(run_id):
+    """某一列的處理過程。平常不會看，好奇或要覆核時才產生。"""
+    record = _run_record(run_id)
+    if record.get("job") is None:
+        raise Missing("找不到這次的執行紀錄，請重新執行")
+    row = _find_row(record["result"], request.args.get("rid", ""))
+    return jsonify(trace(record["job"], record["result"], row))
 
 
 @app.post("/api/runs/<run_id>/rerun")

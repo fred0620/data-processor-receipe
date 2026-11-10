@@ -97,9 +97,27 @@ def test_rejects_non_excel(client):
 def test_recipe_explanation(client):
     text = (EXAMPLES / "recipes" / "invoice-declaration.yaml").read_text(encoding="utf-8")
     data = client.post("/api/recipes/explain", json={"text": text}, headers=LOCAL).json
-    titles = [s["title"] for s in data["sections"]]
-    assert titles[0] == "讀取資料" and "配對：發票對報關單" in titles
-    match = next(s for s in data["sections"] if s["title"] == "配對：發票對報關單")
-    assert any("發票的「發票號碼」等於報關單的「發票參考」" in line for item in match["items"] for line in item["sub"])
+    assert data["subject"] == "發票"                              # 以第一個配對的左表為主角
+    texts = [n["text"] for n in data["flow"]]
+    assert texts[0] == "讀進發票" and any(t.startswith("找對應的報關單") for t in texts)
+    match = next(n for n in data["flow"] if n["text"].startswith("找對應的報關單"))
+    first = match["children"][0]
+    assert first["kind"] == "if" and "發票的「發票號碼」等於報關單的「發票參考」" in first["text"]
+    assert [c["text"] for c in first["children"]] == ["找到 1 筆 → 配對", "找到多筆 → 不自動挑，請你選"]
+    assert match["children"][3]["kind"] == "else"                # 都找不到時
+    assert [n["text"] for n in data["sources"]] == ["報關單", "匯率表"]
     bad = client.post("/api/recipes/explain", json={"text": "recipe: 1\nid: x\n"}, headers=LOCAL)
     assert bad.status_code == 422 and bad.json["problems"]
+
+
+def test_row_trace(client):
+    result = _run(client)
+    trace = client.get(f"/api/runs/{result['run_id']}/trace?rid=invoice:5", headers=LOCAL).json
+    assert trace["steps"][0] == "來自發票，工作表「發票明細」第 5 列"
+    assert any("配到 報關單 AA15A0002（第 3 列）" in s for s in trace["steps"])
+    assert trace["columns"]["金額"][:2] == ["儲存格原本是「USD 3,450.00」", "讀成數字 → 3450"]
+    assert any("AIr" in s and "AIR" in s for s in trace["columns"]["運送方式"])
+    assert trace["columns"]["報單號碼"][0] == "從配到的報關單 AA15A0002（第 3 列）帶過來"
+    assert trace["columns"]["台幣金額"][0] == "在計算步驟「換算台幣」算出"
+    missing = client.get(f"/api/runs/{result['run_id']}/trace?rid=nope", headers=LOCAL)
+    assert missing.status_code == 404
