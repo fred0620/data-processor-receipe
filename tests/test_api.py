@@ -47,12 +47,21 @@ def test_full_review_flow(client):
     assert bad.status_code == 400
 
     picked = client.post(f"/api/runs/{run_id}/match", json={"match": "inv_decl", "left": "invoice:12",
-                                                             "right": "declaration:6"}, headers=LOCAL).json
+                                                             "rights": ["declaration:6"]}, headers=LOCAL).json
     assert next(r for r in picked["output"]["rows"] if r["rid"] == "invoice:12")["values"]["報單號碼"] == "AA15A0005"
 
     wrong = client.post(f"/api/runs/{run_id}/mapping", json={"mapping": "ship_mode", "raw": "陸運", "target": "TRUCK"},
                         headers=LOCAL)
     assert wrong.status_code == 400
+    mapped = client.post(f"/api/runs/{run_id}/mapping", json={"mapping": "ship_mode", "raw": "陸運", "target": "TRUCK",
+                                                               "new_value": True}, headers=LOCAL).json
+    assert not mapped["unmapped"]                               # 清單裡沒有的值，使用者可以自己新增
+    ship = next(m for m in mapped["mappings"] if m["name"] == "ship_mode")
+    assert "TRUCK" in ship["allowed"] and ship["added"] == [{"raw": "陸運", "target": "TRUCK"}]
+    assert next(r for r in mapped["output"]["rows"] if r["rid"] == "invoice:8")["values"]["運送方式"] == "TRUCK"
+    removed = client.post(f"/api/runs/{run_id}/mapping", json={"mapping": "ship_mode", "raw": "陸運", "target": None},
+                          headers=LOCAL).json
+    assert removed["unmapped"] and "TRUCK" not in next(m for m in removed["mappings"] if m["name"] == "ship_mode")["allowed"]
     mapped = client.post(f"/api/runs/{run_id}/mapping", json={"mapping": "ship_mode", "raw": "陸運", "target": "SEA"},
                          headers=LOCAL).json
     assert not mapped["unmapped"]
@@ -63,6 +72,14 @@ def test_full_review_flow(client):
 
     exported = client.get(f"/api/runs/{run_id}/export", headers=LOCAL)
     assert exported.status_code == 200 and exported.data[:2] == b"PK"
+
+
+def test_live_connection_is_event_stream(client):
+    response = client.get("/api/live?client=t1", headers={"Sec-Fetch-Site": "same-origin"}, buffered=False)
+    assert response.mimetype == "text/event-stream"
+    assert "t1" in server._clients
+    response.close()                                           # 頁面關閉：連線斷掉就移除
+    assert "t1" not in server._clients
 
 
 def test_invalid_recipe_returns_problems(client):

@@ -91,6 +91,14 @@ class Strategy:
     review: bool = False
 
 
+MODES = {
+    "one_to_one": "一對一：左右兩邊各只能用一次",
+    "many_to_one": "多對一：左表每列最多對一列，右表可以重複使用",
+    "one_to_many": "一對多：左表每列可以對多列，右表每列只屬於一個左表列",
+    "many_to_many": "多對多：兩邊都可以對多列",
+}
+
+
 @dataclass
 class Match:
     name: str
@@ -100,6 +108,13 @@ class Match:
     strategies: list[Strategy]
     bring: dict[str, str] | None
     unmatched: str
+    rows: str = "expand"              # 對到多列時：expand（每組配對一列）或 combine（彙總成一列）
+    show: dict[str, list[str]] = field(default_factory=dict)  # 配對畫面優先顯示的欄位
+
+    @property
+    def multi(self) -> bool:
+        """左表一列可以對到多列右表。"""
+        return self.mode in ("one_to_many", "many_to_many")
 
 
 @dataclass
@@ -392,15 +407,26 @@ def _match(check: _Checker, raw: Any, tables: set[str]) -> list[Match]:
         return result
     for i, spec in enumerate(raw):
         where = f"match[{i}]"
-        spec = check.mapping(spec, where, {"name", "left", "right", "mode", "strategies", "bring", "unmatched"},
+        spec = check.mapping(spec, where, {"name", "left", "right", "mode", "strategies", "bring", "unmatched",
+                                           "rows", "show"},
                              {"name", "left", "right", "strategies"})
         name = check.name(spec.get("name"), f"{where}.name")
         for side in ("left", "right"):
             if spec.get(side) not in tables:
                 check.fail(f"{where}.{side}", f"找不到表「{spec.get(side)}」（要是 inputs 或前面步驟的名稱）")
         mode = spec.get("mode", "many_to_one")
-        if mode not in ("many_to_one", "one_to_one"):
-            check.fail(f"{where}.mode", "只能是 many_to_one（右表可重複使用）或 one_to_one")
+        if mode not in MODES:
+            check.fail(f"{where}.mode", "只能是 " + "、".join(f"{k}（{v}）" for k, v in MODES.items()))
+        rows = spec.get("rows", "expand")
+        if rows not in ("expand", "combine"):
+            check.fail(f"{where}.rows", "只能是 expand（每組配對一列）或 combine（彙總成一列）")
+        if rows == "combine" and mode not in ("one_to_many", "many_to_many"):
+            check.fail(f"{where}.rows", "combine 只用在 one_to_many 或 many_to_many")
+        show = spec.get("show") or {}
+        if not isinstance(show, dict) or set(show) - {"left", "right"}:
+            check.fail(f"{where}.show", "要是 {left: [欄位], right: [欄位]}")
+            show = {}
+        show = {side: [c for c in check.str_list(show.get(side), f"{where}.show.{side}")] for side in show}
         unmatched = spec.get("unmatched", "flag")
         if unmatched not in ("flag", "keep", "drop"):
             check.fail(f"{where}.unmatched", "只能是 flag、keep、drop")
@@ -412,8 +438,14 @@ def _match(check: _Checker, raw: Any, tables: set[str]) -> list[Match]:
                 check.fail(f"{where}.bring", "要是「新欄位名稱: 右表欄位」的物件，或右表欄位清單")
                 bring = None
             else:
-                for new in bring:
+                for new, source in bring.items():
                     check.name(new, f"{where}.bring.{new}")
+                    if rows == "combine":   # 彙總時 bring 的值是彙總運算式，例如 sum(r.amount)
+                        bring[new] = check.sql(source, f"{where}.bring.{new}") or ""
+                    else:
+                        check.name(source, f"{where}.bring.{new}")
+        elif rows == "combine":
+            check.fail(f"{where}.bring", "combine 要寫 bring，例如 {decl_total: sum(r.amount), decl_nos: string_agg(r.decl_no, '、')}")
         strategies = []
         raw_strategies = spec.get("strategies")
         if not isinstance(raw_strategies, list) or not raw_strategies:
@@ -433,7 +465,7 @@ def _match(check: _Checker, raw: Any, tables: set[str]) -> list[Match]:
                 check.fail(f"{where}.name", f"名稱「{name}」重複")
             tables.add(name)
             if strategies and spec.get("left") in tables and spec.get("right") in tables:
-                result.append(Match(name, spec["left"], spec["right"], mode, strategies, bring, unmatched))
+                result.append(Match(name, spec["left"], spec["right"], mode, strategies, bring, unmatched, rows, show))
     return result
 
 

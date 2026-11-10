@@ -8,17 +8,19 @@ Load → Gate → Normalize → Match → Transform → Validate → Mapping →
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
-from .recipe import Column, Mapping, Recipe, RecipeError, quote
+from .recipe import MODES, Column, Mapping, Recipe, RecipeError, quote
 from .review import MappingStore, ReviewStore
 from .sandbox import SQL_TYPES, Sandbox
 from .textnorm import clean_text, key, parse_date, parse_integer, parse_number
 from .workbook import Sheet, cell_text, data_rows, locate
 
-MAX_CANDIDATES = 5
+MAX_CANDIDATES = 5     # 左表一列只對一列時，最多列出幾筆候選
+MAX_MULTI = 200        # 左表一列可以對多列時，最多取幾列
 STAGES = [
     ("load", "Load 讀取"), ("gate", "Gate 篩選"), ("normalize", "Normalize 整理"), ("match", "Match 配對"),
     ("transform", "Transform 計算"), ("validate", "Validate 驗證"), ("mapping", "Mapping 對照"),
@@ -55,13 +57,17 @@ class Mapper:
         self.specs = recipe.mappings
         self.tables: dict[str, dict[str, str]] = {}
         self.added: dict[str, dict[str, str]] = {}
+        self.allowed: dict[str, list[str] | None] = {}
+        self.store = store
         for name, spec in self.specs.items():
             table: dict[str, str] = {}
             for target, variants in spec.entries.items():
                 table[key(target)] = target
                 for variant in variants:
                     table[key(variant)] = target
-            for value in spec.values or []:
+            allowed = None if spec.values is None else [*spec.values, *(v for v in store.values(name) if v not in spec.values)]
+            self.allowed[name] = allowed
+            for value in allowed or []:
                 table.setdefault(key(value), value)
             added = {k: e["target"] for k, e in store.entries(name).items() if isinstance(e, dict) and "target" in e}
             table.update(added)
@@ -72,11 +78,12 @@ class Mapper:
     def lookup(self, name: str, value: str, place: str) -> str | None:
         spec: Mapping = self.specs[name]
         target = self.tables[name].get(key(value))
-        if target is not None and (spec.values is None or target in spec.values):
+        allowed = self.allowed[name]
+        if target is not None and (allowed is None or target in allowed):
             return target
         entry = self.unmapped.setdefault((name, key(value)), {
             "mapping": name, "raw": value, "count": 0, "places": [], "missing": spec.missing,
-            "allowed": spec.values})
+            "allowed": allowed})
         entry["count"] += 1
         if place not in entry["places"]:
             entry["places"].append(place)
@@ -89,7 +96,7 @@ class _Run:
         self.review = review
         self.mapper = Mapper(recipe, mappings)
         self.issues: list[Issue] = []
-        self.stages: dict[str, dict] = {sid: {"id": sid, "label": label, "status": "skip", "lines": []}
+        self.stages: dict[str, dict] = {sid: {"id": sid, "label": label, "status": "skip", "lines": [], "summary": ""}
                                         for sid, label in STAGES}
         self.inputs: dict[str, dict] = {}
         self.raw: dict[str, dict[str, dict]] = {}      # 輸入表 → rid → 原始文字
@@ -127,6 +134,10 @@ class _Run:
         rank = {"skip": 0, "ok": 1, "review": 2, "error": 3}
         if status and rank[status] > rank[stage["status"]]:
             stage["status"] = status
+
+    def summary(self, sid: str, text: str) -> None:
+        """卡片上的一句話摘要，細節放在 lines。"""
+        self.stages[sid]["summary"] = text
 
     def fatal(self, problems: list[str], sid: str | None = None) -> None:
         sid = sid or self.current
@@ -183,6 +194,7 @@ class _Run:
             self.inputs[spec.name] = {"sheet": found.sheet, "header_row": found.header_row, "rows": len(rows),
                                       "headers": found.headers, "missing": found.missing, "excluded": 0}
             self.stage("load", f"{spec.name}：工作表「{found.sheet}」第 {found.header_row} 列為表頭，{len(rows)} 列")
+        self.summary("load", f"{len(self.inputs)} 張表・{sum(i['rows'] for i in self.inputs.values())} 列")
         return pending
 
     def normalize(self, table: str, column: Column, raw: str | None, rid: str, pending: list[Issue]):
@@ -249,6 +261,7 @@ class _Run:
                 self.stage("gate", status="review")
         if not self.recipe.gate:
             self.stage("gate", "沒有設定篩選條件")
+        self.summary("gate", f"排除 {len(self.excluded)} 列" if self.recipe.gate else "未設定")
         kept = [issue for issue in pending if issue.rid not in excluded_rids]  # 被排除的列不提醒
         self.issues.extend(kept)
         counts: dict[str, int] = {}
@@ -258,6 +271,7 @@ class _Run:
         for code, n in counts.items():
             self.stage("normalize", f"{labels.get(code, code)} {n} 格", "review")
         self.stage("normalize", None if counts else "所有欄位都已整理完成")
+        self.summary("normalize", f"{sum(counts.values())} 格待處理" if counts else "完成")
 
     # ---------- Match ----------
 
@@ -266,6 +280,8 @@ class _Run:
             self._match_one(box, spec)
         if not self.recipe.match:
             self.stage("match", "沒有設定配對")
+        todo = sum(m["counts"]["ambiguous"] + m["counts"]["review"] + m["counts"]["unmatched"] for m in self.matches)
+        self.summary("match", "未設定" if not self.recipe.match else f"{todo} 列待處理" if todo else "全部完成")
 
     def _match_one(self, box: Sandbox, spec) -> None:
         where = f"match「{spec.name}」"
@@ -273,135 +289,214 @@ class _Run:
         for table in (spec.left, spec.right):
             if "_rid" not in box.columns(table):
                 raise RecipeError([f"{where}：表 {table} 沒有 _rid 欄位，transform 的 SELECT 要保留 _rid"])
-        left_rids = [r[0] for r in box.query(f"SELECT _rid FROM {left}", where)]
+        left_rids = list(dict.fromkeys(r[0] for r in box.query(f"SELECT _rid FROM {left}", where)))
         right_rids = {r[0] for r in box.query(f"SELECT _rid FROM {right}", where)}
+        exclusive = spec.mode in ("one_to_one", "one_to_many")   # 右表每列只能給一個左表列
         decided: dict[str, dict] = {}
         used: set[str] = set()
         box.execute("CREATE OR REPLACE TEMP TABLE __decided (rid VARCHAR)", where)
         box.execute("CREATE OR REPLACE TEMP TABLE __used (rid VARCHAR)", where)
 
-        for left_rid, right_rid in self.review.data["matches"].get(spec.name, {}).items():
-            if left_rid not in set(left_rids):
+        known = set(left_rids)
+        for left_rid, chosen in self.review.data["matches"].get(spec.name, {}).items():
+            if left_rid not in known:
                 continue
-            if right_rid == "":
-                decided[left_rid] = {"status": "none", "right": None, "how": "人工：沒有配對", "candidates": []}
-            elif right_rid in right_rids:
-                decided[left_rid] = {"status": "manual", "right": right_rid, "how": "人工指定", "candidates": []}
-                used.add(right_rid)
-            else:
+            chosen = [chosen] if isinstance(chosen, str) and chosen else chosen if isinstance(chosen, list) else []
+            lost = [rid for rid in chosen if rid not in right_rids]
+            chosen = [rid for rid in chosen if rid in right_rids]
+            if lost:
                 self.issues.append(Issue("review", "match", "manual_lost",
-                                         f"{spec.name}：之前人工指定的配對 {right_rid} 已不存在，改回自動比對",
-                                         rid=left_rid, table=spec.left))
+                                         f"{spec.name}：之前人工指定的 {'、'.join(lost)} 已不存在"
+                                         + ("，改回自動比對" if not chosen else ""), rid=left_rid, table=spec.left))
+                if not chosen:
+                    continue
+            if not chosen:
+                decided[left_rid] = {"status": "none", "rights": [], "how": "人工：沒有配對", "candidates": []}
+            else:
+                decided[left_rid] = {"status": "manual", "rights": chosen, "how": "人工指定", "candidates": []}
+                used.update(chosen)
         box.insert_values("__decided", [(rid,) for rid in decided])
         box.insert_values("__used", [(rid,) for rid in used])
 
         stats: list[str] = []
+        limit = MAX_MULTI if spec.multi else MAX_CANDIDATES
         for strategy in spec.strategies:
             swhere = f"{where} 的「{strategy.label}」"
             filters = ["l._rid NOT IN (SELECT rid FROM __decided)"]
             if strategy.when:
                 filters.append(f"COALESCE(({strategy.when}), FALSE)")
-            if spec.mode == "one_to_one":
+            if exclusive:
                 filters.append("r._rid NOT IN (SELECT rid FROM __used)")
             score = f"({strategy.best})" if strategy.best else "NULL"
             rows = box.query(
                 f"SELECT lr, rr, score, n FROM (SELECT l._rid AS lr, r._rid AS rr, {score} AS score, "
                 f"count(*) OVER (PARTITION BY l._rid) AS n, row_number() OVER (PARTITION BY l._rid "
                 f"ORDER BY {score} DESC NULLS LAST, r._rid) AS k FROM {left} l JOIN {right} r ON ({strategy.on}) "
-                f"WHERE {' AND '.join(filters)}) WHERE k <= {MAX_CANDIDATES}", swhere)
+                f"WHERE {' AND '.join(filters)}) WHERE k <= {limit}", swhere)
             grouped: dict[str, list[tuple]] = {}
             for lr, rr, value, n in rows:
                 grouped.setdefault(lr, []).append((rr, value, n))
-            chosen: dict[str, str] = {}
-            new: dict[str, dict] = {}
-            for lr, candidates in grouped.items():
-                top = candidates[0]
-                unique = top[2] == 1 or (strategy.best and top[1] is not None
-                                         and (len(candidates) < 2 or candidates[1][1] is None or top[1] > candidates[1][1]))
-                cand = [{"rid": rr, "score": _json(value)} for rr, value, _ in candidates]
-                if unique:
-                    chosen[lr] = top[0]
-                    new[lr] = {"status": "review" if strategy.review else "auto", "right": top[0],
-                               "how": strategy.label, "candidates": cand, "score": _json(top[1])}
-                else:
-                    new[lr] = {"status": "ambiguous", "right": None, "how": strategy.label, "candidates": cand,
-                               "total": top[2]}
-            if spec.mode == "one_to_one":  # 同一個右表列被多個左表列選中，全部改成待選擇
-                claimed: dict[str, list[str]] = {}
-                for lr, rr in chosen.items():
-                    claimed.setdefault(rr, []).append(lr)
-                for rr, lrs in claimed.items():
-                    if len(lrs) > 1:
-                        for lr in lrs:
-                            new[lr].update(status="ambiguous", right=None, total=len(lrs))
+            new = (self._decide_multi if spec.multi else self._decide_single)(grouped, strategy)
+            if exclusive:
+                self._resolve_claims(new, spec)
             decided.update(new)
             box.insert_values("__decided", [(lr,) for lr in new])
-            newly_used = {d["right"] for d in new.values() if d["right"]}
+            newly_used = {rr for d in new.values() for rr in d["rights"]}
             used |= newly_used
             box.insert_values("__used", [(rr,) for rr in newly_used])
-            matched = sum(1 for d in new.values() if d["right"])
+            matched = sum(1 for d in new.values() if d["rights"])
+            pairs = sum(len(d["rights"]) for d in new.values())
             ambiguous = sum(1 for d in new.values() if d["status"] == "ambiguous")
-            stats.append(f"{strategy.label}：配對 {matched} 列" + (f"，多筆候選 {ambiguous} 列" if ambiguous else ""))
+            stats.append(f"{strategy.label}：{matched} 列" + (f"（{pairs} 組）" if spec.multi and pairs != matched else "")
+                         + (f"，待選 {ambiguous} 列" if ambiguous else ""))
 
         rows_json = []
         for lr in left_rids:
-            decision = decided.get(lr) or {"status": "unmatched", "right": None, "how": "", "candidates": []}
+            decision = decided.get(lr) or {"status": "unmatched", "rights": [], "how": "", "candidates": []}
             decided[lr] = decision
             if decision["status"] == "ambiguous":
                 total = decision.get("total", len(decision["candidates"]))
-                self.issues.append(Issue("review", "match", "match_ambiguous",
-                                         f"{spec.name}：「{decision['how']}」找到 {total} 筆候選，請選擇正確的一筆",
-                                         rid=lr, table=spec.left))
+                text = (f"{spec.name}：「{decision['how']}」找到 {total} 筆候選，請選擇"
+                        if not decision.get("conflict") else
+                        f"{spec.name}：候選的 {spec.right} 同時對到其他列，請選擇")
+                self.issues.append(Issue("review", "match", "match_ambiguous", text, rid=lr, table=spec.left))
             elif decision["status"] == "unmatched" and spec.unmatched == "flag":
                 self.issues.append(Issue("review", "match", "match_none",
                                          f"{spec.name}：所有比對方式都找不到對應的 {spec.right}", rid=lr, table=spec.left))
             elif decision["status"] == "review":
                 self.issues.append(Issue("review", "match", "match_review",
                                          f"{spec.name}：以「{decision['how']}」配對，請確認", rid=lr, table=spec.left))
+            if decision.get("overflow"):
+                self.issues.append(Issue("review", "match", "match_overflow",
+                                         f"{spec.name}：對到超過 {MAX_MULTI} 列，只取前 {MAX_MULTI} 列，比對條件可能太寬",
+                                         rid=lr, table=spec.left))
+            if decision.get("dropped"):
+                self.issues.append(Issue("review", "match", "match_shared",
+                                         f"{spec.name}：{len(decision['dropped'])} 筆 {spec.right} 同時對到其他列，已先拿掉，"
+                                         "請確認要歸給哪一列", rid=lr, table=spec.left))
             rows_json.append({"left": lr, **decision})
 
-        right_columns = [c for c in box.columns(spec.right) if not c.startswith("_")]
-        bring = spec.bring or {f"{spec.right}_{c}": c for c in right_columns}
-        left_columns = box.columns(spec.left)
-        for alias, source in bring.items():
-            if source not in right_columns:
-                raise RecipeError([f"{where}.bring：右表 {spec.right} 沒有欄位 {source}"])
-            if alias in left_columns:
-                raise RecipeError([f"{where}.bring：新欄位名稱 {alias} 和左表欄位重複，請換一個名稱"])
-        self.links[spec.name] = bring
-
-        box.execute(f"CREATE OR REPLACE TEMP TABLE __pairs (seq BIGINT, lr VARCHAR, rr VARCHAR, how VARCHAR, "
-                    f"status VARCHAR)", where)
-        box.insert_values("__pairs", [(i, lr, decided[lr]["right"], decided[lr]["how"], decided[lr]["status"])
-                                      for i, lr in enumerate(left_rids)])
-        brought = "".join(f", r.{quote(src)} AS {quote(alias)}" for alias, src in bring.items())
-        drop = "WHERE p.status <> 'unmatched'" if spec.unmatched == "drop" else ""
-        box.execute(
-            f"CREATE TABLE {quote(spec.name)} AS SELECT l.*{brought}, p.rr AS {quote('_rid_' + spec.name)}, "
-            f"p.how AS {quote('_how_' + spec.name)}, p.status AS {quote('_status_' + spec.name)} "
-            f"FROM {left} l JOIN __pairs p ON p.lr = l._rid LEFT JOIN {right} r ON r._rid = p.rr {drop} "
-            f"ORDER BY p.seq", where)
-
+        self._build_match_table(box, spec, left_rids, decided, where)
         counts = {s: sum(1 for d in decided.values() if d["status"] == s)
                   for s in ("auto", "review", "manual", "none", "ambiguous", "unmatched")}
-        unused = [rid for rid in right_rids if rid not in used]
+        unused = [rid for rid in right_rids if rid not in used] if exclusive else \
+            [rid for rid in right_rids if rid not in {r for d in decided.values() for r in d["rights"]}]
+        pair_total = sum(len(d["rights"]) for d in decided.values())
         self.matches.append({
-            "name": spec.name, "left": spec.left, "right": spec.right, "mode": spec.mode,
-            "strategies": [s.label for s in spec.strategies], "counts": counts, "rows": rows_json,
+            "name": spec.name, "left": spec.left, "right": spec.right, "mode": spec.mode, "multi": spec.multi,
+            "mode_label": MODES[spec.mode].split("：")[0], "rows_mode": spec.rows,
+            "strategies": [s.label for s in spec.strategies], "counts": counts, "pairs": pair_total,
+            "rows": rows_json, "show": self._show_columns(spec),
             "left_rows": _preview(box, spec.left, self.labels.get(spec.left)),
             "right_rows": _preview(box, spec.right, self.labels.get(spec.right)),
             "unused_right": sorted(unused, key=_rid_order)})
         status = "review" if counts["ambiguous"] or counts["review"] or (
             counts["unmatched"] and spec.unmatched == "flag") else None
-        self.stage("match", f"{spec.name}（{spec.left} → {spec.right}）共 {len(left_rids)} 列", status)
+        self.stage("match", f"{spec.name}（{MODES[spec.mode].split('：')[0]}）{len(left_rids)} 列", status)
         for line in stats:
             self.stage("match", "　" + line)
         if counts["manual"] or counts["none"]:
             self.stage("match", f"　人工指定 {counts['manual'] + counts['none']} 列")
         if counts["unmatched"]:
-            self.stage("match", f"　找不到配對 {counts['unmatched']} 列")
+            self.stage("match", f"　找不到 {counts['unmatched']} 列")
         if unused:
-            self.stage("match", f"　{spec.right} 沒被用到 {len(unused)} 列")
+            self.stage("match", f"　{spec.right} 沒用到 {len(unused)} 列")
+
+    @staticmethod
+    def _decide_single(grouped: dict[str, list[tuple]], strategy) -> dict[str, dict]:
+        """左表一列只對一列：只有一筆候選，或 best 分數最高的只有一筆，才算配對成功；其他列給人選。"""
+        new = {}
+        for lr, candidates in grouped.items():
+            top = candidates[0]
+            unique = top[2] == 1 or (strategy.best and top[1] is not None
+                                     and (len(candidates) < 2 or candidates[1][1] is None or top[1] > candidates[1][1]))
+            cand = [{"rid": rr, "score": _json(value)} for rr, value, _ in candidates]
+            if unique:
+                new[lr] = {"status": "review" if strategy.review else "auto", "rights": [top[0]],
+                           "how": strategy.label, "candidates": cand}
+            else:
+                new[lr] = {"status": "ambiguous", "rights": [], "how": strategy.label, "candidates": cand,
+                           "total": top[2]}
+        return new
+
+    @staticmethod
+    def _decide_multi(grouped: dict[str, list[tuple]], strategy) -> dict[str, dict]:
+        """左表一列可以對多列：符合條件的全部都算。"""
+        return {lr: {"status": "review" if strategy.review else "auto", "rights": [rr for rr, _, _ in candidates],
+                     "how": strategy.label, "candidates": [], "overflow": candidates[0][2] > MAX_MULTI}
+                for lr, candidates in grouped.items()}
+
+    @staticmethod
+    def _resolve_claims(new: dict[str, dict], spec) -> None:
+        """右表每列只能給一個左表列時，同一個右表列被多個左表列選中，不替人決定歸屬。"""
+        claimed: dict[str, list[str]] = {}
+        for lr, decision in new.items():
+            for rr in decision["rights"]:
+                claimed.setdefault(rr, []).append(lr)
+        shared = {rr for rr, lrs in claimed.items() if len(lrs) > 1}
+        if not shared:
+            return
+        for lr, decision in new.items():
+            dropped = [rr for rr in decision["rights"] if rr in shared]
+            if not dropped:
+                continue
+            kept = [rr for rr in decision["rights"] if rr not in shared]
+            options = decision["candidates"] or [{"rid": rr, "score": None} for rr in decision["rights"]]
+            if kept:
+                decision.update(rights=kept, dropped=dropped)
+            else:
+                decision.update(status="ambiguous", rights=[], candidates=options, conflict=True,
+                                total=len(options))
+
+    def _build_match_table(self, box: Sandbox, spec, left_rids: list[str], decided: dict[str, dict], where: str) -> None:
+        right_columns = [c for c in box.columns(spec.right) if not c.startswith("_")]
+        left_columns = box.columns(spec.left)
+        combine = spec.rows == "combine"
+        bring = spec.bring or {f"{spec.right}_{c}": c for c in right_columns}
+        for alias, source in bring.items():
+            if not combine and source not in right_columns:
+                raise RecipeError([f"{where}.bring：右表 {spec.right} 沒有欄位 {source}"])
+            if alias in left_columns:
+                raise RecipeError([f"{where}.bring：新欄位名稱 {alias} 和左表欄位重複，請換一個名稱"])
+        self.links[spec.name] = {} if combine else bring
+
+        box.execute("CREATE OR REPLACE TEMP TABLE __pairs (seq BIGINT, lr VARCHAR, rr VARCHAR, how VARCHAR, "
+                    "status VARCHAR)", where)
+        pairs = []
+        for i, lr in enumerate(left_rids):
+            d = decided[lr]
+            for rr in d["rights"] or [None]:
+                pairs.append((i, lr, rr, d["how"], d["status"]))
+        box.insert_values("__pairs", pairs)
+        drop = "WHERE p.status NOT IN ('unmatched', 'ambiguous', 'none')" if spec.unmatched == "drop" else ""
+        rid, how, status = (quote(f"_{k}_{spec.name}") for k in ("rid", "how", "status"))
+        if combine:   # 對到的多列彙總成一列，bring 是彙總運算式
+            brought = "".join(f", ({expr}) AS {quote(alias)}" for alias, expr in bring.items())
+            box.execute(
+                f"CREATE TABLE {quote(spec.name)} AS SELECT l.*{brought}, string_agg(r._rid, ',' ORDER BY r._rid) AS {rid}, "
+                f"count(r._rid) AS {quote('_count_' + spec.name)}, any_value(p.how) AS {how}, any_value(p.status) AS {status} "
+                f"FROM {quote(spec.left)} l JOIN __pairs p ON p.lr = l._rid LEFT JOIN {quote(spec.right)} r ON r._rid = p.rr "
+                f"{drop} GROUP BY ALL ORDER BY min(p.seq)", where)
+        else:         # 每組配對一列；左表一列對到多列時會變成多列
+            brought = "".join(f", r.{quote(src)} AS {quote(alias)}" for alias, src in bring.items())
+            box.execute(
+                f"CREATE TABLE {quote(spec.name)} AS SELECT l.*{brought}, p.rr AS {rid}, p.how AS {how}, "
+                f"p.status AS {status} FROM {quote(spec.left)} l JOIN __pairs p ON p.lr = l._rid "
+                f"LEFT JOIN {quote(spec.right)} r ON r._rid = p.rr {drop} ORDER BY p.seq, p.rr", where)
+
+    def _show_columns(self, spec) -> dict[str, list[str]]:
+        """配對畫面先顯示的欄位：recipe 的 show，沒寫就用比對條件裡出現的欄位。顯示名稱用實際表頭。"""
+        result = {}
+        for side, table, alias in (("left", spec.left, "l"), ("right", spec.right, "r")):
+            labels = self.labels.get(table, {})
+            names = spec.show.get(side) or []
+            if not names:
+                for strategy in spec.strategies:
+                    for found in re.findall(rf'\b{alias}\."?([A-Za-z][A-Za-z0-9_]*)', strategy.on):
+                        if found not in names:
+                            names.append(found)
+            result[side] = [labels.get(n, n) for n in names]
+        return result
 
     # ---------- Transform、Validate ----------
 
@@ -412,6 +507,7 @@ class _Run:
             self.stage("transform", f"{step.name}：{box.count(step.name)} 列" + (f"（{step.note}）" if step.note else ""))
         if not self.recipe.transform:
             self.stage("transform", "沒有設定計算步驟")
+        self.summary("transform", f"{len(self.recipe.transform)} 個步驟" if self.recipe.transform else "未設定")
 
     def validate(self, box: Sandbox) -> None:
         for i, check in enumerate(self.recipe.validate):
@@ -426,6 +522,8 @@ class _Run:
             self.stage("validate", f"{check.message}：{len(rows)} 列", "review" if rows and check.level == "review" else None)
         if not self.recipe.validate:
             self.stage("validate", "沒有設定驗證規則")
+        flagged = len({i.rid for i in self.issues if i.stage == "validate" and i.level == "review"})
+        self.summary("validate", "未設定" if not self.recipe.validate else f"{flagged} 列有問題" if flagged else "全部通過")
 
     # ---------- Mapping + Export ----------
 
@@ -446,9 +544,14 @@ class _Run:
         edits = self.review.data["edits"]
         out_rows = []
         index: dict[str, list[tuple[int, dict]]] = {}
+        seen: dict[str, int] = {}
+        for row in rows:
+            seen[row[0]] = seen.get(row[0], 0) + 1
         for n, row in enumerate(rows):
             own = dict(zip(extra, row[:len(extra)]))
             rid = own.get("_rid") or f"out:{n + 1}"
+            if own.get("_rid") and seen.get(rid, 0) > 1:   # 一對多展開後同一個左表列有多列，加上右表列代號區分
+                rid = "|".join([rid, *(str(own[c]) for c in rid_columns if c != "_rid" and own.get(c))])
             record = {"rid": rid, "row": own.get("_row"), "values": {}, "raw": {}, "edited": {}, "issues": []}
             cell_issues: list[Issue] = []
             for column, value in zip(spec.columns, row[len(extra):]):
@@ -472,9 +575,10 @@ class _Run:
             self.issues.extend(i for i in cell_issues if not set(i.out_columns) & set(record["edited"]))
             out_rows.append(record)
             for column in rid_columns:
-                if own.get(column):
-                    index.setdefault(own[column], []).append((n, translations.get(column, {})))
-            if rid.startswith("out:"):
+                for linked in str(own.get(column) or "").split(","):   # 彙總時是逗號分隔的多個列代號
+                    if linked:
+                        index.setdefault(linked, []).append((n, translations.get(column, {})))
+            if rid != own.get("_rid"):
                 index.setdefault(rid, []).append((n, {}))
 
         dismissed = set(self.review.data["dismissed"])
@@ -518,6 +622,8 @@ class _Run:
         if edited:
             self.stage("mapping", f"人工修改 {edited} 格")
         self.stage("export", f"輸出 {len(out_rows)} 列，需檢查 {review_rows} 列", "review" if review_rows else None)
+        self.summary("mapping", f"待補 {unmapped} 格" if unmapped else "完成" if self.recipe.mappings else "未設定")
+        self.summary("export", f"{len(out_rows)} 列・{review_rows} 列需檢查" if review_rows else f"{len(out_rows)} 列")
 
     def _output_value(self, column, value, record: dict, rid: str, issues: list[Issue]):
         def flag(level: str, code: str, message: str) -> None:
@@ -576,6 +682,12 @@ class _Run:
             "output": self.output,
             "issues": [i.to_json(n) for n, i in enumerate(self.issues)],  # skip 的保留位置，id 才會對上
             "unmapped": sorted(self.mapper.unmapped.values(), key=lambda e: (e["mapping"], -e["count"])),
+            "mappings": [{"name": name, "allowed": self.mapper.allowed[name], "missing": spec.missing,
+                          "custom_values": self.mapper.store.values(name),
+                          "added": sorted(({"raw": e["raw"], "target": e["target"]}
+                                           for e in self.mapper.store.entries(name).values()
+                                           if isinstance(e, dict) and "target" in e), key=lambda e: e["raw"])}
+                         for name, spec in self.recipe.mappings.items()],
             "counts": {"review": sum(1 for i in active if i.level == "review"),
                        "notice": sum(1 for i in active if i.level == "notice"),
                        "error": sum(1 for i in active if i.level == "error")},

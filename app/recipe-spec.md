@@ -109,7 +109,8 @@ mappings:
 - 比對不分全半形、大小寫、空白與標點，所以「空 運」、「AIr」不用另外列。
 - 對應值本身也算一種寫法（資料寫 `AIR` 會對到 `AIR`）。
 - **什麼時候用在 inputs、什麼時候用在 output**：值要拿來配對、篩選或計算時，在 `inputs` 的欄位用 `map`；只是輸出時要換成代碼，在 `output.columns` 用 `map`。
-- 嚴格欄位（找不到就不能交出去的）用 `missing: ask`。使用者在「對照待補」分頁補上後，對照會存在本機，下次處理其他檔案也會自動套用，不需要改 recipe。
+- 嚴格欄位（找不到就不能交出去的）用 `missing: ask`。使用者在「對照表」分頁補上後，對照會存在本機，下次處理其他檔案也會自動套用，不需要改 recipe。
+- `values` 清單裡沒有合適的值時，使用者可以在介面「新增對應值」。新增的值只存在本機，要讓其他人也用到，請把它加進 recipe 的 `values` 和 `entries`。
 
 ## match：配對
 
@@ -118,7 +119,7 @@ match:
   - name: inv_decl                  # 配對結果的表名稱，後面的步驟可以使用
     left: invoice                   # 左表：每一列都會保留
     right: declaration              # 右表：配對成功時把欄位帶過來
-    mode: one_to_one                # many_to_one（預設，右表一列可對多個左表列）或 one_to_one
+    mode: one_to_one                # 見下方「配對方式」，預設 many_to_one
     strategies:                     # 依序嘗試，前面配到的列不會再進入後面的方式
       - label: 發票號碼相同
         on: [[invoice_no, ref_no]]                   # 欄位配對清單：等值比對
@@ -131,18 +132,46 @@ match:
         review: true                # 選填：用這個方式配到的列要人確認
     bring: {decl_no: decl_no, decl_amount: amount}   # 新欄位名稱: 右表欄位；不寫就帶全部，名稱是「右表_欄位」
     unmatched: flag                 # 都找不到時：flag（標記，預設）、keep（不標記）、drop（移除這列）
+    show: {left: [invoice_no, amount, item], right: [ref_no, amount, item]}   # 選填：配對畫面先顯示的欄位
 ```
+
+`show` 不寫時，配對畫面先顯示比對條件裡用到的欄位，其他欄位收起來，使用者可以按「顯示全部欄位」。
+
+配對方式（`mode`）：
+
+| mode | 左表一列 | 右表一列 | 例子 |
+|---|---|---|---|
+| `one_to_one` | 最多對一列 | 只能給一個左表列 | 發票對報關單，一張對一張 |
+| `many_to_one`（預設） | 最多對一列 | 可以給多個左表列 | 明細對匯率表、對客戶主檔 |
+| `one_to_many` | 可以對多列 | 只能給一個左表列 | 一張發票拆成多張報關單 |
+| `many_to_many` | 可以對多列 | 可以給多個左表列 | 多張發票合併申報、互相對沖 |
+
+左表一列可以對多列時（`one_to_many`、`many_to_many`），用 `rows` 決定結果長什麼樣子：
+
+- `rows: expand`（預設）：每一組配對一列。左表一列對到三列，結果就有三列，左表的欄位重複出現。
+- `rows: combine`：彙總成一列。`bring` 改寫成彙總運算式：
+
+```yaml
+    mode: one_to_many
+    rows: combine
+    bring:
+      decl_nos: "string_agg(r.decl_no, '、' ORDER BY r.decl_no)"
+      decl_total: sum(r.amount)
+      decl_last_date: max(r.decl_date)
+```
+
+彙總結果另外有 `_count_<name>`（對到幾列）。之後可以用 validate 檢查，例如 `abs(amount - decl_total) > 0.01`。
 
 配對規則：
 
-- 一個方式只找到一筆：配對成功。
-- 找到多筆：有 `best` 且最高分只有一筆時選它；否則標記「多筆候選」，由人在介面選擇，不會自動挑。
-- `one_to_one` 時，同一個右表列被多個左表列選中，這些左表列都會標記為多筆候選。
-- 人在介面指定的配對、或確認「沒有配對」，會優先於所有自動方式，重新執行也保留。
+- 左表一列只對一列時：一個方式只找到一筆就配對成功；找到多筆時，有 `best` 且最高分只有一筆才選它，否則標記「待選擇」，由人在介面選擇，不會自動挑。
+- 左表一列可以對多列時：同一個方式找到的全部都算（每列最多 200 列，超過會標記，通常代表條件太寬）。
+- 右表一列只能給一個左表列時（`one_to_one`、`one_to_many`），同一個右表列同時對到多個左表列，不會替人決定歸屬：那一列會先拿掉並標記，全部被拿掉時標記「待選擇」。
+- 人在介面指定的配對（可以加入、移除多列）、或確認「沒有配對」，會優先於所有自動方式，重新執行也保留。
 - 寬鬆條件（相似度、只比數字）放在後面，嚴格的放前面。寬鬆的方式建議加 `review: true`。
 - 條件盡量包含至少一個等值條件，只有相似度的條件會讓兩張表每一列互相比較，資料多時會很慢（超過 120 秒會中止）。
 
-配對結果表包含左表所有欄位、`bring` 的欄位，以及系統欄位 `_rid_<name>`（右表列代號）、`_how_<name>`（用哪個方式配到）、`_status_<name>`（auto、review、manual、none、ambiguous、unmatched）。
+配對結果表包含左表所有欄位、`bring` 的欄位，以及系統欄位 `_rid_<name>`（右表列代號；combine 時是逗號分隔的多個代號）、`_how_<name>`（用哪個方式配到）、`_status_<name>`（auto、review、manual、none、ambiguous、unmatched）。
 
 ## transform：計算
 

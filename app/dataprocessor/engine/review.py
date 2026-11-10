@@ -39,7 +39,7 @@ class ReviewStore:
         self.path = root / recipe_id / f"{workbook_hash}.json"
         self.data = _read(self.path, {})
         self.data.setdefault("edits", {})      # rid → 欄位 → {original, value}
-        self.data.setdefault("matches", {})    # 配對名稱 → 左表 rid → 右表 rid（空字串代表確定沒有配對）
+        self.data.setdefault("matches", {})    # 配對名稱 → 左表 rid → 右表 rid 清單（空清單代表確定沒有配對）
         self.data.setdefault("dismissed", [])  # 確認過、不用再提醒的警示
 
     def save(self) -> None:
@@ -56,12 +56,12 @@ class ReviewStore:
         if not row:
             del self.data["edits"][rid]
 
-    def set_match(self, match: str, left: str, right: str | None) -> None:
+    def set_match(self, match: str, left: str, rights: list[str] | None) -> None:
         decisions = self.data["matches"].setdefault(match, {})
-        if right is None:
+        if rights is None:
             decisions.pop(left, None)          # 交回自動比對
         else:
-            decisions[left] = right
+            decisions[left] = list(rights)
 
     def set_dismissed(self, issue_key: str, on: bool) -> None:
         keys = set(self.data["dismissed"])
@@ -79,11 +79,27 @@ class MappingStore:
     def entries(self, table: str) -> dict[str, dict]:
         return self.data.get(table, {})
 
-    def add(self, table: str, raw: str, target: str | None) -> None:
+    def values(self, table: str) -> list[str]:
+        """使用者自己加的對應值（recipe 的 values 清單裡沒有的）。"""
+        return list(self.data.get("_values", {}).get(table, []))
+
+    def add(self, table: str, raw: str, target: str | None, new_value: bool = False) -> None:
         entries = self.data.setdefault(table, {})
         if target is None:
             entries.pop(key(raw), None)
         else:
             entries[key(raw)] = {"raw": raw, "target": target}
+            if new_value:
+                extra = self.data.setdefault("_values", {}).setdefault(table, [])
+                if target not in extra:
+                    extra.append(target)
+        self._prune(table)
         with _lock:
             _write(self.path, self.data)
+
+    def _prune(self, table: str) -> None:
+        """自己加的對應值沒有任何對照在用時一併移除，清單不會越積越多。"""
+        extra = self.data.get("_values", {}).get(table)
+        if extra:
+            used = {e["target"] for e in self.data.get(table, {}).values()}
+            self.data["_values"][table] = [v for v in extra if v in used]

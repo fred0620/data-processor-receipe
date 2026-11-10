@@ -112,7 +112,7 @@ def export(result: dict, path: Path) -> Path:
         for match in result["matches"]:
             for row in match["rows"]:
                 values = [match["name"], row["left"], MATCH_STATUS.get(row["status"], row["status"]), row["how"],
-                          row["right"] or "", "、".join(c["rid"] for c in row["candidates"])
+                          "、".join(row["rights"]), "、".join(c["rid"] for c in row["candidates"])
                           if row["status"] == "ambiguous" else ""]
                 for c, value in enumerate(values, 1):
                     if value:

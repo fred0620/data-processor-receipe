@@ -85,8 +85,8 @@ def test_ambiguous_match_then_manual_pick(env):
     match = result["matches"][0]
     ambiguous = [r for r in match["rows"] if r["status"] == "ambiguous"]
     assert {r["left"] for r in ambiguous} == {"invoice:12", "invoice:13"}
-    review.set_match("inv_decl", "invoice:12", "declaration:6")
-    review.set_match("inv_decl", "invoice:13", "declaration:7")
+    review.set_match("inv_decl", "invoice:12", ["declaration:6"])
+    review.set_match("inv_decl", "invoice:13", ["declaration:7"])
     review.save()
     result, _, _ = env()
     assert _row(result, 12)["values"]["報單號碼"] == "AA15A0005"
@@ -155,3 +155,71 @@ def test_sql_is_sandboxed(env, tmp_path):
 def test_yaml_on_is_not_boolean():
     recipe = load_recipe(RECIPE.read_text(encoding="utf-8"))
     assert recipe.match[0].strategies[0].on.startswith("l.")
+
+
+def _variant(old: str, new: str):
+    text = RECIPE.read_text(encoding="utf-8")
+    assert old in text
+    return load_recipe(text.replace(old, new, 1))
+
+
+def _run_recipe(recipe, tmp_path):
+    return run(recipe, read_workbook(SAMPLE), ReviewStore(tmp_path / "r", recipe.id, "x"),
+               MappingStore(tmp_path / "m", recipe.id), tmp_path / "scratch")
+
+
+MATCH_BLOCK = """    mode: one_to_one
+    strategies:
+      - label: 發票號碼相同"""
+
+
+def test_many_to_many_expands_rows(tmp_path):
+    recipe = _variant(MATCH_BLOCK, """    mode: many_to_many
+    strategies:
+      - label: 金額相同
+        when: "l.amount = 500"
+        on: "l.amount = r.amount"
+      - label: 發票號碼相同""")
+    result = _run_recipe(recipe, tmp_path)
+    led = [r for r in result["output"]["rows"] if r["row"] in (12, 13)]
+    assert len(led) == 4                                       # 兩張發票各對到兩張報關單
+    assert len({r["rid"] for r in led}) == 4                   # 展開後每列仍有自己的代號，可以各自修改
+    match = result["matches"][0]
+    assert next(r for r in match["rows"] if r["left"] == "invoice:12")["rights"] == ["declaration:6", "declaration:7"]
+
+
+def test_one_to_many_does_not_guess_shared_rows(tmp_path):
+    recipe = _variant(MATCH_BLOCK, """    mode: one_to_many
+    strategies:
+      - label: 金額相同
+        when: "l.amount = 500"
+        on: "l.amount = r.amount"
+      - label: 發票號碼相同""")
+    result = _run_recipe(recipe, tmp_path)
+    row = next(r for r in result["matches"][0]["rows"] if r["left"] == "invoice:12")
+    assert row["status"] == "ambiguous" and row["rights"] == []   # 右表同時對到兩張發票，交給人決定
+
+
+def test_many_to_many_combine_into_one_row(tmp_path):
+    text = RECIPE.read_text(encoding="utf-8")
+    text = text.replace(MATCH_BLOCK, """    mode: many_to_many
+    rows: combine
+    strategies:
+      - label: 金額相同
+        when: "l.amount = 500"
+        on: "l.amount = r.amount"
+      - label: 發票號碼相同""", 1)
+    text = text.replace("bring: {decl_no: decl_no, decl_date: decl_date, decl_amount: amount, decl_ship: ship_mode}",
+                        "bring: {decl_no: \"string_agg(r.decl_no, '、' ORDER BY r.decl_no)\", decl_date: max(r.decl_date), "
+                        "decl_amount: sum(r.amount), decl_ship: any_value(r.ship_mode)}", 1)
+    result = _run_recipe(load_recipe(text), tmp_path)
+    assert result["status"] != "error", [i["message"] for i in result["issues"] if i["level"] == "error"]
+    row = next(r for r in result["output"]["rows"] if r["row"] == 12)
+    assert row["values"]["報單號碼"] == "AA15A0005、AA15A0006" and row["values"]["報關金額"] == 1000
+    assert len([r for r in result["output"]["rows"] if r["row"] == 12]) == 1
+
+
+def test_combine_requires_aggregate_bring():
+    text = RECIPE.read_text(encoding="utf-8").replace("    mode: one_to_one\n", "    mode: one_to_one\n    rows: combine\n", 1)
+    with pytest.raises(RecipeError):                           # combine 只能用在一對多或多對多
+        load_recipe(text)

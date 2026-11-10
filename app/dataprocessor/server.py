@@ -21,7 +21,7 @@ import uuid
 import webbrowser
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, request, send_file, send_from_directory
+from flask import Flask, Response, jsonify, redirect, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 from . import __version__, engine, logs, paths
@@ -37,7 +37,8 @@ WEB = Path(__file__).resolve().parent / "web"
 MAX_CLIENTS = 50
 PORT_RANGE = 20
 CLOSE_GRACE_SECONDS = 8          # 容許重新整理頁面，不會誤關
-CLIENT_TIMEOUT_SECONDS = 1800    # 瀏覽器當掉、沒通知就消失時的上限
+LIVE_PING_SECONDS = 5            # 頁面連線的保持訊號間隔；瀏覽器關掉後最晚這麼久會發現
+CLIENT_TIMEOUT_SECONDS = 180     # 沒有保持連線、只靠 heartbeat 的頁面，多久沒消息就當作已關閉
 NO_CLIENT_TIMEOUT_SECONDS = 600  # 啟動後一直沒有開啟頁面
 WATCH_SECONDS = 2
 SLEEP_GAP_SECONDS = 30           # 檢查間隔突然變長，代表電腦剛從睡眠醒來
@@ -52,6 +53,7 @@ app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 
 _clients: dict[str, float] = {}
+_live: dict[str, int] = {}        # 保持連線中的頁面 → 連線數
 _clients_lock = threading.Lock()
 _jobs: dict[str, dict] = {}       # 背景工作；有未完成的工作時不會自動結束
 
@@ -182,6 +184,41 @@ def heartbeat():
             return _error("開啟的頁面太多，請關閉一些分頁", 429)
         _clients[client] = time.time()
     return jsonify({"ok": True})
+
+
+@app.get("/api/live")
+def live():
+    """頁面開著時保持一條連線（Server-Sent Events）。
+
+    瀏覽器整個關掉、當掉或直接結束時，頁面來不及通知 /api/bye，但這條連線一定會斷：
+    下一次送保持訊號時寫入失敗，就知道這個頁面已經不在了。背景分頁的計時器會被瀏覽器放慢，
+    連線不會，所以不靠 heartbeat 判斷。"""
+    client = request.args.get("client", "")
+    if not re.fullmatch(r"[\w\-]{1,64}", client):
+        raise ValueError("連線代號不正確")
+    with _clients_lock:
+        if client not in _clients and len(_clients) >= MAX_CLIENTS:
+            return _error("開啟的頁面太多，請關閉一些分頁", 429)
+        _clients[client] = time.time()
+        _live[client] = _live.get(client, 0) + 1
+
+    def stream():
+        try:
+            yield "retry: 3000\n\n"
+            while True:
+                time.sleep(LIVE_PING_SECONDS)
+                yield ": ping\n\n"
+                with _clients_lock:
+                    _clients[client] = time.time()
+        finally:  # 連線斷了（頁面關閉、瀏覽器結束）
+            with _clients_lock:
+                _live[client] -= 1
+                if _live[client] <= 0:
+                    del _live[client]
+                    _clients.pop(client, None)
+
+    return Response(stream(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 @app.post("/api/bye")
@@ -453,19 +490,26 @@ def _typed(kind: str, value):
 
 @app.post("/api/runs/<run_id>/match")
 def decide_match(run_id):
-    """指定配對：right 是右表列代號；空字串代表確定沒有配對；null 代表交回自動比對。"""
+    """指定配對：rights 是右表列代號清單；空清單代表確定沒有配對；null 代表交回自動比對。
+    左表一列只能對一列的配對方式，清單最多一筆。"""
     record = _run_record(run_id)
     body = _json_body()
     match = next((m for m in record["result"]["matches"] if m["name"] == body.get("match")), None)
     if match is None:
         raise Missing("找不到這個配對")
-    left, right = str(body.get("left", "")), body.get("right")
+    left, rights = str(body.get("left", "")), body.get("rights")
     if left not in match["left_rows"]:
         raise Missing("找不到左表這一列")
-    if right not in (None, "") and str(right) not in match["right_rows"]:
-        raise Missing("找不到右表這一列")
+    if rights is not None:
+        if not isinstance(rights, list) or len(rights) > 1000:
+            raise ValueError("配對內容不正確")
+        rights = list(dict.fromkeys(str(r) for r in rights))
+        if any(r not in match["right_rows"] for r in rights):
+            raise Missing("找不到右表這一列")
+        if len(rights) > 1 and not match["multi"]:
+            raise ValueError(f"{match['name']} 是{match['mode_label']}，左表一列只能對一列")
     review: ReviewStore = record["review"]
-    review.set_match(match["name"], left, None if right is None else str(right))
+    review.set_match(match["name"], left, rights)
     review.save()
     log.info("指定配對 run=%s", run_id)
     return jsonify(_execute(run_id))
@@ -501,13 +545,18 @@ def add_mapping(run_id):
     target = body.get("target")
     if not raw or len(raw) > 200:
         raise ValueError("原始值不正確")
+    store = MappingStore(paths.MAPPINGS, recipe.id)
+    new_value = False
     if target is not None:
         target = str(target).strip()
-        if not target or len(target) > 200:
+        if not target or len(target) > 200 or not target.isprintable():
             raise ValueError("請選擇或輸入對應值")
-        if spec.values is not None and target not in spec.values:
-            raise ValueError(f"對應值只能是：{'、'.join(spec.values)}")
-    MappingStore(paths.MAPPINGS, recipe.id).add(name, raw, target)
+        allowed = [*(spec.values or []), *store.values(name)]
+        if spec.values is not None and target not in allowed:
+            if not body.get("new_value"):   # 清單外的值要明確表示「新增」，避免打錯字變成新代碼
+                raise ValueError(f"「{target}」不在對應值清單裡；要新增請選「新增對應值」")
+            new_value = True
+    store.add(name, raw, target, new_value)
     log.info("補上對照 run=%s mapping=%s", run_id, log_text(name))
     return jsonify(_execute(run_id))
 
@@ -550,7 +599,7 @@ def _watch_clients() -> None:
                 for client in _clients:
                     _clients[client] = now
             for client, seen in list(_clients.items()):
-                if now - seen > CLIENT_TIMEOUT_SECONDS:
+                if client not in _live and now - seen > CLIENT_TIMEOUT_SECONDS:
                     del _clients[client]
             seen_client = seen_client or bool(_clients)
             active = bool(_clients)
