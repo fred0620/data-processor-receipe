@@ -31,7 +31,7 @@ bash run.sh                                # 或 Windows 雙擊 run.bat，用使
 | 改了使用手冊或換版說明後重建 HTML | `uv run --project app python scripts/build_manual.py` |
 | 新增套件 | `uv add --project app 套件名稱` |
 | 試打包（不含離線套件） | `uv run --project app python scripts/build_release.py` |
-| 換版與退回測試（Windows） | `uv run --project app python tests\release\make_versions.py $env:TEMP\dp-release`，再執行 `powershell -ExecutionPolicy Bypass -File tests\release\test_update.ps1 $env:TEMP\dp-release` |
+| 換版與退回測試（Windows） | `$env:PYTHONIOENCODING="utf-8"`，`uv run --project app python tests\release\make_versions.py $env:TEMP\dp-release`，再執行 `powershell -ExecutionPolicy Bypass -File tests\release\test_update.ps1 $env:TEMP\dp-release` |
 
 規則：
 

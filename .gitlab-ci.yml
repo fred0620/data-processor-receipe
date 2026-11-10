@@ -24,6 +24,8 @@ update-test:
   tags: [saas-windows-medium-amd64]
   image: null
   cache: []
+  variables:
+    PYTHONIOENCODING: utf-8
   script:
     - powershell -NoProfile -Command "irm https://astral.sh/uv/install.ps1 | iex"
     - $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"

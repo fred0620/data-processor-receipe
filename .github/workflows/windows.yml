@@ -11,6 +11,8 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8   # Windows 主控台預設不是 UTF-8，印中文會失敗
     steps:
       - uses: actions/checkout@v4
       - name: 安裝 uv
