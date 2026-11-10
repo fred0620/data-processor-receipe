@@ -95,12 +95,12 @@ const state = {
   recipes: [], recipeId: null, workbook: null, result: null,
   tab: "rows", filter: "review", search: "", selected: null, stageOpen: null,
   matchName: null, matchFilter: "todo", matchSearch: "", pickerFor: null, matchFocus: null, matchAll: false,
-  issueFilter: "review", checked: new Set(),
+  issueFilter: "review", issueCode: null, checked: new Set(),
   traces: {}, openTrace: new Set(),   // 執行紀錄：好奇時才向程式要，要過的先記著
 };
 const LEVEL_TEXT = { review: "需檢查", notice: "提示", error: "無法執行" };
 const STAGE_TEXT = { load: "Load", gate: "Gate", normalize: "Normalize", match: "Match", transform: "Transform", validate: "Validate", mapping: "Mapping", export: "Export" };
-const MATCH_TEXT = { auto: ["已配對", "ok"], review: ["待確認", "review"], manual: ["人工指定", "manual"], none: ["確認沒有", "manual"], ambiguous: ["待選擇", "review"], unmatched: ["找不到", "missing"] };
+const MATCH_TEXT = { auto: ["已配對", "ok"], review: ["待確認", "review"], confirmed: ["已確認", "ok"], manual: ["人工指定", "manual"], none: ["確認沒有", "manual"], ambiguous: ["待選擇", "review"], unmatched: ["找不到", "missing"] };
 
 /* 畫面偏好（顯示哪些欄位、緊湊或寬鬆）只存在這台電腦的瀏覽器，存不了也不影響使用 */
 const prefs = {
@@ -331,7 +331,13 @@ function renderPipeline() {
     el("span", { class: "summary", text: stage.summary || (stage.status === "skip" ? "未執行" : "") })))));
   const detail = $("stageDetail");
   detail.hidden = !open;
-  if (open) {
+  if (open && open.checks) {   /* 驗證：每條規則可以直接跳到它標記的列 */
+    put(detail, el("h3", { text: open.label }),
+      el("ul", {}, open.checks.map((check) => el("li", {},
+        `${check.message}：${check.rows} 列`, check.done ? el("span", { class: "muted", text: `（已確認 ${check.done}）` }) : null,
+        check.rows ? el("button", { type: "button", class: "link", style: "margin-left:10px", text: "查看",
+          onclick: () => { Object.assign(state, { tab: "issues", issueFilter: "all", issueCode: check.code }); renderTabs(); } }) : null))));
+  } else if (open) {
     put(detail, el("h3", { text: open.label }),
       el("ul", {}, open.lines.length ? open.lines.map((line) => el("li", { class: line.startsWith("　") ? "sub" : null, text: line.trim() }))
         : el("li", { class: "muted", text: "沒有細節" })));
@@ -354,7 +360,7 @@ function renderTabs() {
   ].filter(Boolean);
   if (!tabs.some((t) => t[0] === state.tab)) state.tab = "rows";
   put($("tabs"), tabs.map(([id, label, n, plain]) => el("button", {
-    type: "button", class: `tab${state.tab === id ? " active" : ""}`, onclick: () => { state.tab = id; renderTabs(); },
+    type: "button", class: `tab${state.tab === id ? " active" : ""}`, onclick: () => { state.tab = id; state.issueCode = null; renderTabs(); },
   }, label, n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)));
   ({ rows: renderRows, match: renderMatch, mapping: renderMapping, excluded: renderExcluded, issues: renderIssues })[state.tab]();
   renderDrawer();
@@ -607,7 +613,7 @@ function renderMatch() {
   const r = state.result;
   const match = r.matches.find((m) => m.name === state.matchName) || r.matches[0];
   state.matchName = match.name;
-  const todo = new Set(["ambiguous", "unmatched", "review"]);
+  const todo = new Set(["ambiguous", "unmatched", "review"]);   // 已確認（confirmed）不算待處理
   const filters = { todo: (x) => todo.has(x.status), all: () => true, manual: (x) => x.status === "manual" || x.status === "none" };
   const needle = state.matchSearch.toLowerCase();
   let rows = match.rows.filter(filters[state.matchFilter]);
@@ -654,14 +660,16 @@ function matchCard(match, row) {
   const togglePicker = () => { state.pickerFor = state.pickerFor === row.left ? null : row.left; renderMatch(); };
 
   const actions = [];
-  if (reviewIssue && !reviewIssue.dismissed) actions.push(el("button", { type: "button", class: "small primary", text: "確認正確", onclick: () => act("dismiss", { keys: [reviewIssue.key], on: true }) }));
+  if (reviewIssue && row.status === "review") actions.push(el("button", { type: "button", class: "small primary", text: "確認正確", onclick: () => act("dismiss", { keys: [reviewIssue.key], on: true }) }));
+  if (reviewIssue && row.status === "confirmed") actions.push(el("button", { type: "button", class: "small ghost", text: "取消確認", onclick: () => act("dismiss", { keys: [reviewIssue.key], on: false }) }));
   if (row.status === "manual" || row.status === "none") actions.push(el("button", { type: "button", class: "small ghost", text: "交回自動", onclick: () => decide(null) }));
   actions.push(el("button", { type: "button", class: "small ghost", text: match.multi ? "加入" : row.rights.length ? "改選" : "手動指定", onclick: togglePicker }));
   if (row.status !== "none") actions.push(el("button", { type: "button", class: "small ghost", text: "沒有配對", onclick: () => decide([]) }));
 
   const how = row.status === "ambiguous" ? `依「${row.how}」找到 ${row.total || candidates.length} 筆可能的${match.right_label}，請選一筆`
     : row.status === "unmatched" ? `每一種方式都找不到對應的${match.right_label}`
-      : row.status === "none" ? "已確認沒有對應" : row.status === "manual" ? "人工指定" : `依「${row.how}」配到`;
+      : row.status === "none" ? "已確認沒有對應" : row.status === "manual" ? "人工指定"
+        : row.status === "confirmed" ? `依「${row.how}」配到，你已確認` : `依「${row.how}」配到`;
 
   let side;
   if (row.status === "ambiguous") {
@@ -703,6 +711,11 @@ function matchCard(match, row) {
 function picker(match, row, columns, decide) {
   const taken = new Set(row.rights);
   const unused = new Set(match.unused_right);
+  const owner = {};   // 右表列 → 已經配給哪一列左表
+  for (const other of match.rows) {
+    if (other.left === row.left) continue;
+    for (const rid of other.rights) owner[rid] = match.left_rows[other.left];
+  }
   const list = el("div", { class: "picker-list" });
   const draw = (text) => {
     const needle = text.trim().toLowerCase();
@@ -713,6 +726,8 @@ function picker(match, row, columns, decide) {
       rowTitle(match.right_rows[rid], match.right_title),
       el("span", { class: "summary muted", title: oneLine(match.right_rows[rid].values, Object.keys(match.right_rows[rid].values)), text: oneLine(match.right_rows[rid].values, columns) }),
       unused.has(rid) ? el("span", { class: "badge", text: "未使用" }) : null,
+      owner[rid] ? el("span", { class: "badge review", title: "一對一時改選這筆，另一列就要重新指定",
+        text: `已配給${oneLine(owner[rid].values, match.left_title) || ""} 第 ${owner[rid].row ?? "?"} 列` }) : null,
       el("button", { type: "button", class: "small", text: match.multi ? "加入" : "選這筆", onclick: () => decide(match.multi ? [...row.rights, rid] : [rid]) })))
       : el("p", { class: "muted", text: "找不到符合的資料" }));
   };
@@ -781,7 +796,8 @@ function renderIssues() {
     review: (i) => !i.dismissed && (i.level === "review" || i.level === "error"), notice: (i) => !i.dismissed && i.level === "notice",
     dismissed: (i) => i.dismissed, all: () => true,
   };
-  const issues = activeIssues().filter(filters[state.issueFilter]);
+  const issues = activeIssues().filter(filters[state.issueFilter]).filter((i) => !state.issueCode || i.code === state.issueCode);
+  const only = state.issueCode && activeIssues().find((i) => i.code === state.issueCode);
   const rowOf = new Map();
   state.result.output.rows.forEach((row) => row.issues.forEach((i) => rowOf.set(i, row)));
   const selectable = issues.filter((i) => i.level !== "error");
@@ -789,6 +805,9 @@ function renderIssues() {
     el("div", { class: "toolbar" },
       chips([["review", "需檢查"], ["notice", "提示"], ["dismissed", "已確認"], ["all", "全部"]], state.issueFilter,
         (id) => { state.issueFilter = id; state.checked.clear(); renderTabs(); }),
+      only ? el("span", { class: "badge manual" }, `只看：${only.message}`,
+        el("button", { type: "button", class: "link", style: "margin-left:6px", text: "✕", title: "顯示全部",
+          onclick: () => { state.issueCode = null; renderTabs(); } })) : null,
       el("span", { class: "spacer" }),
       selectable.length ? el("button", { type: "button", class: "ghost small", text: "全選", onclick: () => { selectable.forEach((i) => state.checked.add(i.key)); renderTabs(); } }) : null,
       state.checked.size ? el("button", {

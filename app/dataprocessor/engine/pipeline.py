@@ -118,6 +118,7 @@ class _Run:
         self.created: dict[str, tuple[str, str]] = {}       # 計算步驟產生的欄位 → (步驟名稱, 說明)
         self.check_hits: list[set[str]] = []                # 每條驗證規則標記到的列
         self.out_trail: dict[tuple[str, str], str] = {}     # 輸出欄位套對照表的經過
+        self.check_info: list[dict] = []                    # 每條驗證規則（給流程卡片列出並連到警示）
         self.upstream = self._plan_edits()             # rid → 輸入欄位 → (輸出欄位, 修改紀錄)
         self.applied: dict[tuple[str, str], object] = {}  # 已在輸入階段套用的修改 (rid, 輸出欄位) → 原值
 
@@ -404,6 +405,11 @@ class _Run:
             if not chosen:
                 decided[left_rid] = {"status": "none", "rights": [], "how": "人工：沒有配對", "candidates": []}
             else:
+                shared = [rid for rid in chosen if rid in used] if exclusive else []
+                if shared:   # 右表一列只能給一個左表列，卻被人工指定給兩列
+                    self.issues.append(Issue("review", "match", "manual_shared",
+                                             f"{label}：{right_label} {'、'.join(shared)} 也被指定給另一列，"
+                                             "一筆只能配給一列，請改掉其中一個", rid=left_rid, table=spec.left, ref=spec.name))
                 decided[left_rid] = {"status": "manual", "rights": chosen, "how": "人工指定", "candidates": []}
                 used.update(chosen)
         box.insert_values("__decided", [(rid,) for rid in decided])
@@ -442,9 +448,12 @@ class _Run:
                          + (f"，待選 {ambiguous} 列" if ambiguous else ""))
 
         rows_json = []
+        dismissed = set(self.review.data["dismissed"])
         for lr in left_rids:
             decision = decided.get(lr) or {"status": "unmatched", "rights": [], "how": "", "candidates": []}
             decided[lr] = decision
+            if decision["status"] == "review" and f"match_review|{spec.left}|{lr}|" in dismissed:
+                decision["status"] = "confirmed"   # 使用者已確認這筆配對，不再算待處理
             if decision["status"] == "ambiguous":
                 total = decision.get("total", len(decision["candidates"]))
                 text = (f"{label}：依「{decision['how']}」找到 {total} 筆可能的{right_label}，請選擇"
@@ -455,7 +464,7 @@ class _Run:
                 self.issues.append(Issue("review", "match", "match_none",
                                          f"{label}：所有比對方式都找不到對應的{right_label}", rid=lr, table=spec.left,
                                          ref=spec.name))
-            elif decision["status"] == "review":
+            elif decision["status"] in ("review", "confirmed"):
                 self.issues.append(Issue("review", "match", "match_review",
                                          f"{label}：依「{decision['how']}」配對，請確認", rid=lr, table=spec.left,
                                          ref=spec.name))
@@ -471,7 +480,7 @@ class _Run:
 
         self._build_match_table(box, spec, left_rids, decided, where)
         counts = {s: sum(1 for d in decided.values() if d["status"] == s)
-                  for s in ("auto", "review", "manual", "none", "ambiguous", "unmatched")}
+                  for s in ("auto", "review", "confirmed", "manual", "none", "ambiguous", "unmatched")}
         unused = [rid for rid in right_rids if rid not in used] if exclusive else \
             [rid for rid in right_rids if rid not in {r for d in decided.values() for r in d["rights"]}]
         pair_total = sum(len(d["rights"]) for d in decided.values())
@@ -631,6 +640,7 @@ class _Run:
                 raise RecipeError([f"{where}：表 {table} 沒有 _rid 欄位，無法標到是哪一列"])
             rows = box.query(f"SELECT _rid FROM {quote(table)} WHERE COALESCE(({check.where}), FALSE)", where)
             self.check_hits.append({rid for (rid,) in rows})
+            self.check_info.append({"code": f"check{i}", "message": check.message, "level": check.level})
             for (rid,) in rows:
                 self.issues.append(Issue(check.level, "validate", f"check{i}", check.message, rid=rid, table=table,
                                          out_columns=list(check.highlight)))
@@ -713,6 +723,7 @@ class _Run:
                     if issue.code in ("parse", "unmapped") and raw is not None and record["values"].get(target) is None:
                         record["raw"][target] = raw
                 record["issues"].append(number)
+        self._refresh_after_review()
         for record in out_rows:  # 同一格已經有解析或對照問題時，不再重複提醒「必填空白」
             explained = {c for i in record["issues"] for c in self.issues[i].out_columns
                          if self.issues[i].code in ("parse", "unmapped")}
@@ -786,6 +797,36 @@ class _Run:
                 return kept
             return mapped
         return text
+
+    def _refresh_after_review(self) -> None:
+        """套上「確認無誤」之後，重算流程卡片：已確認的不再算待處理。"""
+        active = [i for i in self.issues if not i.dismissed and i.level == "review"]
+        if self.check_info:
+            stage = self.stages["validate"]
+            stage["lines"], stage["checks"], flagged = [], [], 0
+            for info in self.check_info:
+                hits = [i for i in self.issues if i.code == info["code"]]
+                open_hits = [i for i in hits if not i.dismissed]
+                done = len(hits) - len(open_hits)
+                stage["checks"].append({**info, "rows": len(hits), "open": len(open_hits), "done": done})
+                stage["lines"].append(f"{info['message']}：{len(hits)} 列" + (f"（已確認 {done}）" if done else ""))
+                if info["level"] == "review":
+                    flagged += len(open_hits)
+            stage["status"] = "review" if flagged else "ok"
+            stage["summary"] = f"{flagged} 列有問題" if flagged else (
+                "全部通過" if not any(c["rows"] for c in stage["checks"]) else "已全部確認")
+        for sid in ("normalize", "match"):
+            stage = self.stages[sid]
+            if stage["status"] != "review":
+                continue
+            remaining = [i for i in active if i.stage == sid]
+            if not remaining:
+                stage["status"] = "ok"
+                stage["summary"] = "已全部確認"
+            elif sid == "normalize":
+                stage["summary"] = f"{len(remaining)} 格待處理"
+            else:
+                stage["summary"] = f"{len({i.rid for i in remaining})} 列待處理"
 
     # ---------- 結果 ----------
 

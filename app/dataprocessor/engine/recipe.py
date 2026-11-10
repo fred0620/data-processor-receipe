@@ -218,7 +218,7 @@ class Recipe:
             return self.inputs[table].label or table
         for match in self.match:
             if match.name == table:
-                return match.label or f"{self.table_label(match.left)}對{self.table_label(match.right)}"
+                return match.label or f"{self.table_label(match.left)} → {self.table_label(match.right)}"
         return table
 
     def tables(self) -> list[str]:

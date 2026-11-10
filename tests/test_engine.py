@@ -285,3 +285,32 @@ def test_yaml_anchors_aliases_and_tags_are_refused():
                 "description: !!str hello\n"):
         with pytest.raises(RecipeError):
             load_recipe(base.replace("description:", bad + "zzz:", 1))
+
+
+def test_confirmed_match_leaves_todo_and_validate_card_counts_dismissed(env):
+    result, review, _ = env()
+    review.set_match("inv_decl", "invoice:12", ["declaration:6"])
+    review.save()
+    result, review, _ = env()
+    row = next(r for r in result["matches"][0]["rows"] if r["left"] == "invoice:13")
+    assert row["status"] == "review"                              # 另一筆用相似比對配到，待確認
+    keys = [i["key"] for i in result["issues"] if i["code"] in ("match_review", "check0")]
+    for issue_key in keys:
+        review.set_dismissed(issue_key, True)
+    review.save()
+    result, _, _ = env()
+    row = next(r for r in result["matches"][0]["rows"] if r["left"] == "invoice:13")
+    assert row["status"] == "confirmed"                           # 確認後不再算待處理
+    assert result["matches"][0]["counts"]["review"] == 0
+    validate = next(s for s in result["stages"] if s["id"] == "validate")
+    assert validate["status"] == "ok" and validate["summary"] == "已全部確認"
+    assert validate["checks"][0]["done"] == validate["checks"][0]["rows"] == 1
+
+
+def test_same_right_row_assigned_twice_is_flagged(env):
+    _, review, _ = env()
+    review.set_match("inv_decl", "invoice:12", ["declaration:6"])
+    review.set_match("inv_decl", "invoice:13", ["declaration:6"])
+    review.save()
+    result, _, _ = env()
+    assert any(i["code"] == "manual_shared" and i["rid"] == "invoice:13" for i in result["issues"])
