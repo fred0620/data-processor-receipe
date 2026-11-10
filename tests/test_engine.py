@@ -311,7 +311,7 @@ def test_confirmed_match_leaves_todo_and_validate_card_counts_dismissed(env):
     assert row["status"] == "confirmed"                           # 確認後不再算待處理
     assert result["matches"][0]["counts"]["review"] == 0
     validate = next(s for s in result["stages"] if s["id"] == "validate")
-    assert validate["status"] == "confirmed" and validate["summary"] == "已確認 1 列"
+    assert validate["status"] == "confirmed" and validate["summary"] == "已處理 1 列"
     assert validate["checks"][0]["done"] == validate["checks"][0]["rows"] == 1
 
 
@@ -339,3 +339,22 @@ def test_stage_cards_follow_the_same_rule_as_tabs(env):
     assert stage["status"] == "review" and stage["summary"] == f"{len(todo) - 1} 列待處理"
     row = next(r for r in result["matches"][0]["rows"] if r["left"] == first)
     assert row["acknowledged"] and not row["open"]
+
+
+def test_validate_fixed_by_edit_stays_as_record(env):
+    result, review, _ = env()
+    flagged = [i for i in result["issues"] if i["code"] == "check0" and not i["dismissed"]]
+    assert flagged
+    rid = flagged[0]["rid"]
+    row = next(r for r in result["output"]["rows"] if r["rid"] == rid)
+    review.set_edit(rid, "金額", row["values"]["金額"], row["values"]["報關金額"])   # 改成和報關金額一樣
+    review.save()
+    result, _, _ = env()
+    kept = [i for i in result["issues"] if i["code"] == "check0" and i["rid"] == rid]
+    assert kept and kept[0]["resolved"] == "edited" and kept[0]["dismissed"]
+    validate = next(s for s in result["stages"] if s["id"] == "validate")
+    assert validate["status"] == "confirmed"                      # 藍色，不是綠色
+    review.set_edit(rid, "金額", None, None)                      # 還原後又變回需檢查
+    review.save()
+    result, _, _ = env()
+    assert any(i["code"] == "check0" and i["rid"] == rid and not i["dismissed"] for i in result["issues"])

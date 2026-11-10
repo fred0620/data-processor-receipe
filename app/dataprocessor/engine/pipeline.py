@@ -143,6 +143,10 @@ class _Run:
                     plan.setdefault(rid, {})[source] = (out_name, change)
         return plan
 
+    def _edited(self, rid: str) -> bool:
+        """這一列（或由它展開的列）有沒有人工修改。"""
+        return any(key == rid or key.startswith(rid + "|") for key in self.review.data["edits"])
+
     def stage(self, sid: str, line: str | None = None, status: str | None = None) -> None:
         stage = self.stages[sid]
         if stage["status"] == "skip":
@@ -658,6 +662,18 @@ class _Run:
             for (rid,) in rows:
                 self.issues.append(Issue(check.level, "validate", f"check{i}", check.message, rid=rid, table=table,
                                          out_columns=list(check.highlight)))
+            # 之前被這條規則標記、人工修改後通過的列：留下紀錄，不讓它直接消失
+            hits = {rid for (rid,) in rows}
+            memory = self.review.data.setdefault("flagged", {})
+            remembered = f"{table}|{check.message}"
+            fixed = [rid for rid in memory.get(remembered, []) if rid not in hits and self._edited(rid)]
+            for rid in fixed:
+                self.issues.append(Issue(check.level, "validate", f"check{i}", check.message, rid=rid, table=table,
+                                         out_columns=list(check.highlight), resolved="edited",
+                                         note="人工修改後已通過這條檢查"))
+            if sorted(hits | set(fixed)) != sorted(memory.get(remembered, [])):
+                memory[remembered] = sorted(hits | set(fixed))
+                self.review.save()
             self.stage("validate", f"{check.message}：{len(rows)} 列", "review" if rows and check.level == "review" else None)
         if not self.recipe.validate:
             self.stage("validate", "沒有設定驗證規則")
@@ -872,13 +888,13 @@ class _Run:
                 open_hits = [i for i in hits if not i.dismissed]
                 done = len(hits) - len(open_hits)
                 stage["checks"].append({**info, "rows": len(hits), "open": len(open_hits), "done": done})
-                stage["lines"].append(f"{info['message']}：{len(hits)} 列" + (f"（已確認 {done}）" if done else ""))
+                stage["lines"].append(f"{info['message']}：{len(hits)} 列" + (f"（已處理 {done}）" if done else ""))
                 if info["level"] == "review":
                     open_total += len(open_hits)
                     done_total += done
             if stage["status"] != "error":
                 stage["status"] = status(open_total, done_total)
-                stage["summary"] = (f"{open_total} 列有問題" if open_total else f"已確認 {done_total} 列" if done_total
+                stage["summary"] = (f"{open_total} 列有問題" if open_total else f"已處理 {done_total} 列" if done_total
                                     else "全部通過")
 
         # Mapping：還沒補的對照
