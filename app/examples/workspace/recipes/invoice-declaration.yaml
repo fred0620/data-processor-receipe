@@ -1,0 +1,106 @@
+# 範例：發票明細對報關單，再帶入匯率。
+# 可以把這份檔案和 docs/recipe-spec.md 一起交給 AI，請它照你的資料改寫。
+recipe: 1
+id: invoice-declaration
+name: 發票對報關單（範例）
+description: 排除作廢發票，依發票號碼配對報關單，找不到時改用數字或品名比對，最後換算台幣。
+
+inputs:
+  invoice:
+    sheet: [發票明細]
+    columns:
+      invoice_no: {aliases: [發票號碼, Invoice No], required: true, text: [trim, halfwidth, upper, no_space]}
+      inv_date: {aliases: [發票日期, 日期], type: date}
+      item: {aliases: [品名], required: true}
+      qty: {aliases: [數量], type: integer}
+      amount: {aliases: [金額], type: number, required: true}
+      currency: {aliases: [幣別], text: [trim, halfwidth, upper]}
+      ship_mode: {aliases: [運送方式], map: ship_mode}
+      status: {aliases: [狀態]}
+  declaration:
+    sheet: [報關單]
+    columns:
+      decl_no: {aliases: [報單號碼], required: true, text: [trim, halfwidth, upper]}
+      ref_no: {aliases: [發票參考, 發票號碼], text: [trim, halfwidth, upper, no_space]}
+      decl_date: {aliases: [申報日期], type: date}
+      item: {aliases: [貨名, 品名]}
+      amount: {aliases: [申報金額], type: number}
+      ship_mode: {aliases: [運輸方式], map: ship_mode}
+  fx:
+    sheet: [匯率]
+    columns:
+      currency: {aliases: [幣別], required: true, text: [trim, halfwidth, upper]}
+      rate: {aliases: [匯率], type: number, required: true}
+
+gate:
+  - input: invoice
+    keep: "status IS NULL OR status <> '作廢'"
+    label: 排除作廢發票
+
+mappings:
+  ship_mode:
+    values: [AIR, SEA, EXPRESS]
+    entries:
+      AIR: [空運, 航空, Air freight]
+      SEA: [海運, Ocean]
+      EXPRESS: [快遞, Courier]
+    missing: ask
+
+match:
+  - name: inv_decl
+    left: invoice
+    right: declaration
+    mode: one_to_one
+    strategies:
+      - label: 發票號碼相同
+        on: [[invoice_no, ref_no]]
+      - label: 只比數字部分
+        when: "dp_digits(l.invoice_no) <> ''"
+        on: "dp_digits(l.invoice_no) = dp_digits(r.ref_no)"
+      - label: 金額相同且品名相似
+        on: "l.amount = r.amount AND jaro_winkler_similarity(dp_key(l.item), dp_key(r.item)) >= 0.85"
+        best: "jaro_winkler_similarity(dp_key(l.item), dp_key(r.item))"
+        review: true
+    bring: {decl_no: decl_no, decl_date: decl_date, decl_amount: amount, decl_ship: ship_mode}
+    unmatched: flag
+
+  - name: with_fx
+    left: inv_decl
+    right: fx
+    strategies:
+      - label: 幣別相同
+        on: [[currency, currency]]
+    bring: {rate: rate}
+
+transform:
+  - name: result
+    note: 換算台幣
+    sql: |
+      SELECT *, round(amount * rate, 0) AS amount_twd
+      FROM with_fx
+
+validate:
+  - where: "decl_amount IS NOT NULL AND abs(amount - decl_amount) > 0.01"
+    message: 發票金額和報關金額不同
+    highlight: [金額, 報關金額]
+  - where: "decl_ship IS NOT NULL AND ship_mode IS NOT NULL AND decl_ship <> ship_mode"
+    message: 發票和報關單的運送方式不同
+    level: notice
+    highlight: [運送方式]
+
+output:
+  from: result
+  sheet: 整理結果
+  order_by: "inv_date, invoice_no"
+  columns:
+    - {name: 發票號碼, from: invoice_no}
+    - {name: 發票日期, from: inv_date, type: date}
+    - {name: 品名, from: item}
+    - {name: 數量, from: qty, type: integer}
+    - {name: 金額, from: amount, type: number}
+    - {name: 幣別, from: currency}
+    - {name: 運送方式, from: ship_mode, required: true}
+    - {name: 報單號碼, from: decl_no}
+    - {name: 報關金額, from: decl_amount, type: number}
+    - {name: 匯率, from: rate, type: number}
+    - {name: 台幣金額, from: amount_twd, type: number}
