@@ -1,0 +1,25 @@
+# 在 Windows、macOS、Linux 上跑同一套測試。
+# 換版與退回（tests/test_release.py）只在 Windows 上實際執行，其他系統會顯示略過。
+name: tests
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONIOENCODING: utf-8   # Windows 主控台預設不是 UTF-8，印中文會失敗
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: 測試
+        run: uv run --project app pytest tests -q -rs
