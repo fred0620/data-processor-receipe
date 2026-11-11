@@ -33,7 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: read
-        run: echo "image=$(sed -n 's/^  UV_IMAGE: *//p' .gitlab-ci.yml)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "image=$(sed -n 's/^  UV_IMAGE: *//p' .gitlab-ci.yml)" >> "$GITHUB_OUTPUT"
   gitlab-steps:
     needs: gitlab-image
     runs-on: ubuntu-latest
