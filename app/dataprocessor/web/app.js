@@ -28,13 +28,41 @@ function summary(values, limit = 6) {
   return Object.values(values).filter((v) => v !== null && v !== "").slice(0, limit).join("・");
 }
 
-function toast(message, bad = false) {
+/* action：{ text, run }，在訊息旁放一個按鈕（例如「復原」），給多一點時間按 */
+function toast(message, bad = false, action = null) {
   const node = $("toast");
-  node.textContent = message;
+  node.replaceChildren(el("span", { text: message }));
+  if (action) {
+    node.append(el("button", { type: "button", class: "small ghost toast-action", text: action.text,
+      onclick: () => { node.hidden = true; action.run(); } }));
+  }
   node.classList.toggle("bad", bad);
   node.hidden = false;
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => { node.hidden = true; }, 5000);
+  toast.timer = setTimeout(() => { node.hidden = true; }, action ? 12000 : 5000);
+}
+
+/* 重新檢查：按第一次顯示會清掉多少，再按一次才清，避免誤按；清完可以復原 */
+function resetButton(result) {
+  const button = $("resetButton");
+  clearTimeout(resetButton.timer);
+  button.classList.remove("confirming");
+  button.hidden = result.status === "error";
+  button.disabled = !result.decisions;
+  button.textContent = "重新檢查";
+  button.title = result.decisions ? "清掉這個檔案的修改、指定的配對和確認，從頭再檢查一次" : "還沒有人工修改、指定或確認";
+  button.onclick = async () => {
+    if (!button.classList.contains("confirming")) {
+      button.classList.add("confirming");
+      button.textContent = `清掉 ${result.decisions} 項人工決定？再按一次`;
+      resetButton.timer = setTimeout(() => resetButton(state.result), 4000);
+      return;
+    }
+    if (await act("reset")) {
+      toast("已清掉人工決定，可以從頭檢查。補上的對照表沒有清除。", false,
+        { text: "復原", run: async () => { if (await act("restore")) toast("已復原重設前的檢查"); } });
+    }
+  };
 }
 
 class ApiError extends Error {
@@ -319,6 +347,7 @@ function setResult(result, fresh = false) {
   put(status, el("span", { class: `dot ${result.status}` }),
     { ok: "全部正常", review: `${result.counts.review} 個地方需檢查`, error: "無法執行" }[result.status] || "全部正常");
   $("exportButton").href = `/api/runs/${result.run_id}/export`;
+  resetButton(result);
   $("exportButton").toggleAttribute("hidden", result.status === "error");
   renderPipeline();
   renderTabs();

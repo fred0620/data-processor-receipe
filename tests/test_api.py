@@ -121,3 +121,33 @@ def test_row_trace(client):
     assert trace["columns"]["台幣金額"][0] == "在計算步驟「換算台幣」算出"
     missing = client.get(f"/api/runs/{result['run_id']}/trace?rid=nope", headers=LOCAL)
     assert missing.status_code == 404
+
+
+def test_reset_clears_decisions_and_can_be_restored(client):
+    result = _run(client)
+    run_id = result["run_id"]
+    assert result["decisions"] == 0 and not result["can_restore"]
+    client.post(f"/api/runs/{run_id}/edit", json={"rid": "invoice:9", "column": "金額", "value": "300"}, headers=LOCAL)
+    client.post(f"/api/runs/{run_id}/match", json={"match": "inv_decl", "left": "invoice:12",
+                                                    "rights": ["declaration:6"]}, headers=LOCAL)
+    client.post(f"/api/runs/{run_id}/mapping", json={"mapping": "ship_mode", "raw": "陸運", "target": "SEA"},
+                headers=LOCAL)
+    before = client.get(f"/api/runs/{run_id}", headers=LOCAL).json
+    assert before["decisions"] == 2
+
+    # 關掉重開、重新上傳同一份檔案：人工決定會套回來
+    again = _run(client)
+    assert again["decisions"] == 2
+
+    reset = client.post(f"/api/runs/{again['run_id']}/reset", headers=LOCAL).json
+    assert reset["decisions"] == 0 and reset["can_restore"]
+    row = next(r for r in reset["output"]["rows"] if r["rid"] == "invoice:9")
+    assert not row["edited"] and row["values"]["金額"] is None             # 回到原本需要檢查的樣子
+    assert next(r for m in reset["matches"] if m["name"] == "inv_decl"
+                for r in m["rows"] if r["left"] == "invoice:12")["status"] == "ambiguous"
+    assert not reset["unmapped"]                                              # 補上的對照表不清（其他檔案也在用）
+
+    restored = client.post(f"/api/runs/{again['run_id']}/restore", headers=LOCAL).json
+    assert restored["decisions"] == 2 and not restored["can_restore"]
+    assert next(r for r in restored["output"]["rows"] if r["rid"] == "invoice:9")["values"]["金額"] == 300
+    assert client.post(f"/api/runs/{again['run_id']}/restore", headers=LOCAL).status_code == 404

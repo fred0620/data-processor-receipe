@@ -46,6 +46,36 @@ class ReviewStore:
         with _lock:
             _write(self.path, self.data)
 
+    @property
+    def backup(self) -> Path:
+        return self.path.with_name(self.path.stem + ".before-reset.json")
+
+    def count(self) -> int:
+        """人工決定的數量：修改的格子、指定的配對、確認過的警示。"""
+        return (sum(len(cells) for cells in self.data["edits"].values())
+                + sum(len(rows) for rows in self.data["matches"].values()) + len(self.data["dismissed"]))
+
+    def reset(self) -> None:
+        """清掉這個檔案的人工決定，從頭再檢查一次。清之前先留一份，可以復原。
+        補上的對照表跟著 recipe，其他檔案也在用，不在這裡清。"""
+        with _lock:
+            _write(self.backup, self.data)
+            self.data = {"edits": {}, "matches": {}, "dismissed": []}
+            _write(self.path, self.data)
+
+    def restore(self) -> bool:
+        """回到重設之前。只能復原最近一次重設。"""
+        with _lock:
+            saved = _read(self.backup, {})
+            if not saved:
+                return False
+            self.data = saved
+            for name, default in (("edits", {}), ("matches", {}), ("dismissed", [])):
+                self.data.setdefault(name, default)
+            _write(self.path, self.data)
+            self.backup.unlink(missing_ok=True)
+            return True
+
     def set_edit(self, rid: str, column: str, original, value) -> None:
         row = self.data["edits"].setdefault(rid, {})
         if value is None and column in row:

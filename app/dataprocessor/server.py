@@ -420,6 +420,8 @@ def _execute(run_id: str) -> dict:
         _jobs[run_id]["finished"] = True
     result["run_id"] = run_id
     result["workbook"] = {"id": record["workbook"], "name": workbook["name"]}
+    result["decisions"] = review.count()               # 人工決定的數量，重設前讓使用者知道會清掉多少
+    result["can_restore"] = review.backup.exists()     # 剛重設過，可以復原
     record.update(result=result, review=review, job=keep.get("job"))   # job 是執行紀錄，覆核某一列時用
     log.info("執行 run=%s recipe=%s status=%s rows=%d issues=%d seconds=%.1f", run_id, log_text(recipe.id),
              result["status"], len(result["output"]["rows"]), result["counts"]["review"], time.time() - started)
@@ -476,6 +478,24 @@ def row_trace(run_id):
 @app.post("/api/runs/<run_id>/rerun")
 def rerun(run_id):
     _run_record(run_id)
+    return jsonify(_execute(run_id))
+
+
+@app.post("/api/runs/<run_id>/reset")
+def reset_review(run_id):
+    """清掉這個檔案的人工決定（修改、指定的配對、確認），從頭再檢查。會先留一份可以復原。"""
+    record = _run_record(run_id)
+    record["review"].reset()
+    log.info("重設人工決定 run=%s", run_id)
+    return jsonify(_execute(run_id))
+
+
+@app.post("/api/runs/<run_id>/restore")
+def restore_review(run_id):
+    record = _run_record(run_id)
+    if not record["review"].restore():
+        raise Missing("沒有可以復原的重設")
+    log.info("復原重設 run=%s", run_id)
     return jsonify(_execute(run_id))
 
 
