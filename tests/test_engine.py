@@ -6,7 +6,8 @@ import pytest
 from dataprocessor.engine import RecipeError, load_recipe, run
 from dataprocessor.engine.export import export
 from dataprocessor.engine.review import MappingStore, ReviewStore
-from dataprocessor.engine.textnorm import key, parse_date, parse_number
+from dataprocessor.engine.recipe import Extract
+from dataprocessor.engine.textnorm import extract_with_rule, key, parse_date, parse_number
 from dataprocessor.engine.workbook import read_workbook
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -246,6 +247,8 @@ inputs:
       info: {aliases: [說明]}
       origin: {source: info, extract: [{after: [產地, Origin], before: [規格]}, {line: 2}]}
       spec: {source: info, extract: {after: 規格}}
+      last: {source: info, extract: {line: -1}}
+      third: {source: info, extract: [{after: 等級}, {line: 3}]}
 output:
   from: item
   columns:
@@ -254,6 +257,8 @@ output:
     - {name: 單價, from: price, type: number}
     - {name: 產地, from: origin}
     - {name: 規格, from: spec}
+    - {name: 最後一行, from: last}
+    - {name: 第三行, from: third}
 """
 
 
@@ -263,7 +268,7 @@ def test_stacked_sheets_extract_and_decimal(tmp_path):
     book = Workbook()
     book.active.title = "invoice_2021"
     book.active.append(["發票號碼"])
-    for year, rows in (("2021", [("A1", "1.000,02", "產地：台灣 規格：10mm"), ("A2", "12,5", "第一行\nJapan")]),
+    for year, rows in (("2021", [("A1", "1.000,02", "產地：台灣 規格：10mm"), ("A2", "12,5", "第一行\nJapan\n第三行")]),
                        ("2022", [("B1", "1.234.567,8", "ORIGIN = Vietnam"), ("B2", "1,000.5", "無說明")])):
         sheet = book.create_sheet(f"item_{year}")
         sheet.append(["品號", "單價", "說明"])
@@ -285,6 +290,12 @@ def test_stacked_sheets_extract_and_decimal(tmp_path):
     assert rows["B1"]["values"]["產地"] == "Vietnam"                      # 關鍵字不分大小寫，等號不帶進值
     assert rows["B2"]["values"]["產地"] is None and rows["B2"]["values"]["規格"] is None
     assert rows["A1"]["sheet"] == "item_2021"
+    # 用第幾行取值時，回傳的「第幾種取法」不能被行號蓋掉（只有一種取法、取最後一行時原本會當掉）
+    assert rows["A2"]["values"]["最後一行"] == "第三行" and rows["A1"]["values"]["最後一行"] == "產地:台灣 規格:10mm"
+    assert rows["A2"]["values"]["第三行"] == "第三行"
+    assert extract_with_rule("a\nb\nc", [Extract(line=-1)]) == ("c", 0)
+    assert extract_with_rule("a\nb\nc", [Extract(after=["x"]), Extract(line=3)]) == ("c", 1)
+    assert extract_with_rule("a", [Extract(line=5)]) == (None, None)
 
 
 def test_yaml_anchors_aliases_and_tags_are_refused():

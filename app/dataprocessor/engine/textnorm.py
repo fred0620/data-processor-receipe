@@ -136,11 +136,11 @@ def extract_with_rule(text: str | None, rules) -> tuple[str | None, int | None]:
     for index, rule in enumerate(rules):
         value = base
         if rule.line is not None:
-            lines = [line for line in value.split("\n")]
-            index = rule.line - 1 if rule.line > 0 else len(lines) + rule.line
-            if not 0 <= index < len(lines):
+            lines = value.split("\n")
+            position = rule.line - 1 if rule.line > 0 else len(lines) + rule.line   # 行的位置，和寫法的序號 index 分開
+            if not 0 <= position < len(lines):
                 continue
-            value = lines[index]
+            value = lines[position]
         if rule.after:
             found = [m for m in (_keyword(w).search(value) for w in rule.after) if m]
             if not found:
