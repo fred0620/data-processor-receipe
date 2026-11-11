@@ -393,3 +393,47 @@ def test_left_by_elimination_after_manual_pick_needs_review(env):
         assert other["status"] == "review" and other["rights"] == ["declaration:7"] and other["open"]
         assert "人工配給別列" in other["why"]
         assert _row(result, 13)["status"] == "review"                 # 結果表也是需檢查，不是綠色
+
+
+def test_save_retries_when_windows_refuses_replace(tmp_path, monkeypatch):
+    """Windows 上防毒或索引剛好在讀檔時，os.replace 會被拒絕（WinError 5），要稍等再試。"""
+    import os
+
+    from dataprocessor.engine import review as review_module
+
+    real = os.replace
+    calls = {"n": 0}
+
+    def flaky(source, target):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise PermissionError(5, "Access is denied")
+        real(source, target)
+
+    monkeypatch.setattr(review_module.os, "replace", flaky)
+    monkeypatch.setattr(review_module.time, "sleep", lambda _s: None)
+    store = ReviewStore(tmp_path, "r", "x")
+    store.set_edit("a:1", "金額", "約 300", 300)
+    store.save()
+    assert calls["n"] == 4 and ReviewStore(tmp_path, "r", "x").data["edits"]["a:1"]["金額"]["value"] == 300
+
+    monkeypatch.setattr(review_module.os, "replace", lambda *_a: (_ for _ in ()).throw(PermissionError(5, "denied")))
+    with pytest.raises(PermissionError):
+        store.save()
+    assert not list((tmp_path / "r").glob("*.tmp"))                 # 失敗時不留下暫存檔
+
+
+def test_run_continues_when_validate_memory_cannot_be_saved(env, monkeypatch):
+    result, review, _ = env()
+    assert any(i["code"] == "check0" for i in result["issues"])
+    review.data["flagged"] = {}                                        # 讓驗證這次一定要存紀錄
+    review.save()
+    tried = []
+
+    def refuse(self):
+        tried.append(1)
+        raise PermissionError(5, "denied")
+
+    monkeypatch.setattr(ReviewStore, "save", refuse)
+    result, _, _ = env()                                              # 驗證紀錄存不了，結果照樣出來
+    assert tried and result["status"] in ("review", "ok") and result["output"]["rows"]

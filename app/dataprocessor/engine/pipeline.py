@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import fnmatch
+import logging
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -27,6 +28,8 @@ STAGES = [
     ("transform", "Transform 計算"), ("validate", "Validate 驗證"), ("mapping", "Mapping 對照"),
     ("export", "Export 輸出"),
 ]
+
+log = logging.getLogger("dataprocessor")
 
 
 @dataclass
@@ -690,7 +693,10 @@ class _Run:
                                          note="人工修改後已通過這條檢查"))
             if sorted(hits | set(fixed)) != sorted(memory.get(remembered, [])):
                 memory[remembered] = sorted(hits | set(fixed))
-                self.review.save()
+                try:
+                    self.review.save()
+                except OSError:   # 只是輔助紀錄，存不了不影響這次的結果，下次執行會再存
+                    log.warning("驗證紀錄存檔失敗，略過")
             self.stage("validate", f"{check.message}：{len(rows)} 列", "review" if rows and check.level == "review" else None)
         if not self.recipe.validate:
             self.stage("validate", "沒有設定驗證規則")

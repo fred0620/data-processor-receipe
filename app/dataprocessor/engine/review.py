@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from .textnorm import key
@@ -27,9 +28,26 @@ def _read(path: Path, default: dict) -> dict:
 def _write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, temp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    with os.fdopen(handle, "w", encoding="utf-8") as stream:
-        json.dump(data, stream, ensure_ascii=False, indent=1)
-    os.replace(temp, path)  # 寫完才換掉，避免當機時留下寫到一半的檔案
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=1)
+        _replace(temp, path)  # 寫完才換掉，避免當機時留下寫到一半的檔案
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+
+
+def _replace(source: str, target: Path, attempts: int = 20) -> None:
+    """Windows 上，防毒或搜尋索引剛好在讀這個檔案時，換檔會被拒絕（WinError 5）。
+    稍等再試，約 2 秒內都失敗才放棄。Mac 與 Linux 不會發生。"""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.1)
 
 
 class ReviewStore:
