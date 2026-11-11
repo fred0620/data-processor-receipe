@@ -101,7 +101,7 @@ python3 scripts/audit.py                              # 本機先檢查一次弱
 
 1. 到 uv 的 GitHub Release 頁，找新版本的 `.sha256` 檔。
 2. 改 `app/launcher.ps1` 的 `$UvVersion` 和 `$UvSha256`，以及 `app/launcher.sh` 的 `UV_VERSION` 和各平台的 `SHA`。
-3. 改 `.gitlab-ci.yml` 的 `UV_IMAGE` 版本。
+3. 改 `.gitlab-ci.yml` 的 `UV_IMAGE` 版本（標籤格式 `uv:版本-python3.12-trixie-slim`，可用的標籤見 [uv 的說明](https://docs.astral.sh/uv/guides/integration/docker/#available-images)；推到 GitHub 時會實際拉一次確認）。
 4. 刪掉本機的 `runtime/` 後用 `run.bat` 啟動一次，確認能下載並通過驗證。
 
 ### 升級 Python
