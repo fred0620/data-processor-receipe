@@ -369,3 +369,27 @@ def test_validate_fixed_by_edit_stays_as_record(env):
     review.save()
     result, _, _ = env()
     assert any(i["code"] == "check0" and i["rid"] == rid and not i["dismissed"] for i in result["issues"])
+
+
+def test_left_by_elimination_after_manual_pick_needs_review(env):
+    """兩列一模一樣、候選也相同：人工指定其中一列後，另一列只剩一筆，不能自動算成功（綠色）。"""
+    recipe_text = RECIPE.read_text(encoding="utf-8").replace("        review: true\n", "", 1)
+    recipe = load_recipe(recipe_text)
+    assert not any(s.review for m in recipe.match for s in m.strategies)   # 不靠 recipe 的 review 設定
+    import tempfile
+    with tempfile.TemporaryDirectory() as temp:
+        temp = Path(temp)
+        review = ReviewStore(temp / "r", recipe.id, "x")
+        sheets = read_workbook(SAMPLE)
+        result = run(recipe, sheets, review, MappingStore(temp / "m", recipe.id), temp / "s")
+        rows = {r["left"]: r for r in next(m for m in result["matches"] if m["name"] == "inv_decl")["rows"]}
+        assert rows["invoice:12"]["status"] == rows["invoice:13"]["status"] == "ambiguous"
+        review.set_match("inv_decl", "invoice:12", ["declaration:6"])
+        review.save()
+        result = run(recipe, sheets, review, MappingStore(temp / "m", recipe.id), temp / "s")
+        rows = {r["left"]: r for r in next(m for m in result["matches"] if m["name"] == "inv_decl")["rows"]}
+        assert rows["invoice:12"]["status"] == "manual"
+        other = rows["invoice:13"]
+        assert other["status"] == "review" and other["rights"] == ["declaration:7"] and other["open"]
+        assert "人工配給別列" in other["why"]
+        assert _row(result, 13)["status"] == "review"                 # 結果表也是需檢查，不是綠色

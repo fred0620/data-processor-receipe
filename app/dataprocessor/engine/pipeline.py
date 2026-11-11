@@ -401,8 +401,10 @@ class _Run:
         exclusive = spec.mode in ("one_to_one", "one_to_many")   # 右表每列只能給一個左表列
         decided: dict[str, dict] = {}
         used: set[str] = set()
+        hand: set[str] = set()     # 人工指定給某一列的右表列
         box.execute("CREATE OR REPLACE TEMP TABLE __decided (rid VARCHAR)", where)
         box.execute("CREATE OR REPLACE TEMP TABLE __used (rid VARCHAR)", where)
+        box.execute("CREATE OR REPLACE TEMP TABLE __hand (rid VARCHAR)", where)
 
         known = set(left_rids)
         for left_rid, chosen in self.review.data["matches"].get(spec.name, {}).items():
@@ -430,8 +432,10 @@ class _Run:
                                              "一筆只能配給一列，請改掉其中一個", rid=left_rid, table=spec.left, ref=spec.name))
                 decided[left_rid] = {"status": "manual", "rights": chosen, "how": "人工指定", "candidates": []}
                 used.update(chosen)
+                hand.update(chosen)
         box.insert_values("__decided", [(rid,) for rid in decided])
         box.insert_values("__used", [(rid,) for rid in used])
+        box.insert_values("__hand", [(rid,) for rid in hand])
 
         stats: list[str] = []
         limit = MAX_MULTI if spec.multi else MAX_CANDIDATES
@@ -452,6 +456,18 @@ class _Run:
             for lr, rr, value, n in rows:
                 grouped.setdefault(lr, []).append((rr, value, n))
             new = (self._decide_multi if spec.multi else self._decide_single)(grouped, strategy)
+            if exclusive and hand:
+                # 本來有好幾筆候選，只是其中幾筆被人工指定給別列，剩下的才變成唯一一筆。
+                # 這是刪去法推出來的，不算自動配對成功，要人確認。
+                taken = dict(box.query(
+                    f"SELECT l._rid, count(*) FROM {left} l JOIN {right} r ON ({strategy.on}) "
+                    f"WHERE l._rid NOT IN (SELECT rid FROM __decided) AND r._rid IN (SELECT rid FROM __hand)"
+                    + (f" AND COALESCE(({strategy.when}), FALSE)" if strategy.when else "")
+                    + " GROUP BY l._rid", swhere))
+                for lr, decision in new.items():
+                    if taken.get(lr) and decision["status"] in ("auto", "review") and decision["rights"]:
+                        decision["status"] = "review"
+                        decision["why"] = f"另有 {taken[lr]} 筆候選已人工配給別列，只剩這一筆"
             if exclusive:
                 self._resolve_claims(new, spec)
             decided.update(new)
@@ -483,8 +499,9 @@ class _Run:
                                          f"{label}：所有比對方式都找不到對應的{right_label}", rid=lr, table=spec.left,
                                          ref=spec.name))
             elif decision["status"] in ("review", "confirmed"):
+                why = f"（{decision['why']}）" if decision.get("why") else ""
                 self.issues.append(Issue("review", "match", "match_review",
-                                         f"{label}：依「{decision['how']}」配對，請確認", rid=lr, table=spec.left,
+                                         f"{label}：依「{decision['how']}」配對{why}，請確認", rid=lr, table=spec.left,
                                          ref=spec.name))
             if decision.get("overflow"):
                 self.issues.append(Issue("review", "match", "match_overflow",

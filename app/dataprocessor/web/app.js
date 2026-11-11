@@ -731,10 +731,10 @@ function matchCard(match, row) {
   actions.push(el("button", { type: "button", class: "small ghost", text: match.multi ? "加入" : row.rights.length ? "改選" : "手動指定", onclick: togglePicker }));
   if (row.status !== "none") actions.push(el("button", { type: "button", class: "small ghost", text: "沒有配對", onclick: () => decide([]) }));
 
-  const how = row.status === "ambiguous" ? `依「${row.how}」找到 ${row.total || candidates.length} 筆可能的${match.right_label}，請選一筆`
+  const how = (row.status === "ambiguous" ? `依「${row.how}」找到 ${row.total || candidates.length} 筆可能的${match.right_label}，請選一筆`
     : row.status === "unmatched" ? `每一種方式都找不到對應的${match.right_label}`
       : row.status === "none" ? "已確認沒有對應" : row.status === "manual" ? "人工指定"
-        : row.status === "confirmed" ? `依「${row.how}」配到，你已確認` : `依「${row.how}」配到`;
+        : row.status === "confirmed" ? `依「${row.how}」配到，你已確認` : `依「${row.how}」配到`) + (row.why ? `。${row.why}` : "");
 
   let side;
   if (row.status === "ambiguous") {

@@ -41,7 +41,9 @@ def _match_story(match: dict, decision: dict) -> list[str]:
         lines.append(f"　找到 {decision.get('total', len(decision['candidates']))} 筆，分不出是哪一筆，等你選")
     else:
         lines.append("　配到 " + "、".join(_who(match, r) for r in decision["rights"]))
-        if status == "review":
+        if decision.get("why"):
+            lines.append(f"　{decision['why']}，要你確認")
+        elif status == "review":
             lines.append("　這個方式配到的要你確認")
     if decision.get("dropped"):
         lines.append(f"　另有 {len(decision['dropped'])} 筆同時對到其他列，先拿掉等你決定")
