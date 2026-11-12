@@ -45,8 +45,9 @@ def _assert_snapped(page, side=None):
     page.wait_for_timeout(400)
     view = page.evaluate("""(scope) => {
       const wrap = document.querySelector(scope + ' .source-wrap');
-      const edge = wrap.querySelector('tbody th.rowno').getBoundingClientRect().right;
-      const lefts = [...wrap.querySelectorAll('thead th')].slice(1).map((th) => th.getBoundingClientRect().left);
+      const fixed = wrap.querySelector('tbody td.mark') || wrap.querySelector('tbody th.rowno');   // 固定在左邊的最後一欄
+      const edge = fixed.getBoundingClientRect().right;
+      const lefts = [...wrap.querySelectorAll('thead th:not(.corner):not(.mark-col)')].map((th) => th.getBoundingClientRect().left);
       const cell = wrap.querySelector('td.src-cell').getBoundingClientRect();
       return { scroll: wrap.scrollLeft, edge, lefts, cellRight: cell.right, wrapRight: wrap.getBoundingClientRect().right };
     }""", scope)
@@ -224,3 +225,64 @@ def test_horizontal_scroll_snaps_to_column(ui):
     page.wait_for_timeout(300)
     _assert_snapped(page)
     ui.shot("source-snap")
+
+
+def test_match_status_on_source_sheets(ui):
+    """原始表標出每一列的配對狀態：已配對淡化並寫配到哪一列，找不到、沒用到要處理的標橘色；按「→ 4」另一邊跳過去。"""
+    page = ui.run_sample()
+    page.click(".tab:has-text('原始資料')")
+    page.click(".tab-body [role=switch]:has-text('左右並排')")
+    page.wait_for_selector(".tab-body .source-pane[data-side='右'] .source-grid td.mark")
+    left, right = _pane(page, "左"), _pane(page, "右")
+    match = ui.state("state.result.matches[0]")
+    row_of = lambda rid: int(rid.split(":")[-1])
+
+    def mark(pane, row):
+        tr = pane.locator(f"tbody tr[data-row='{row}']")
+        return tr.get_attribute("class") or "", tr.locator("td.mark").inner_text().strip()
+
+    for item in match["rows"]:
+        cls, text = mark(left, row_of(item["left"]))
+        if item["rights"]:
+            assert text == "→ " + "、".join(str(row_of(r)) for r in item["rights"][:3]), (item, text)
+            assert ("m-open" if item["status"] == "review" else "m-done") in cls
+        elif item["status"] == "unmatched":
+            assert text == "找不到" and "m-open" in cls
+        elif item["status"] == "ambiguous":
+            assert "候選" in text and "m-open" in cls
+    assert match["unused_right"], "範例裡報關單有沒用到的列"
+    candidates = {row_of(c["rid"]) for x in match["rows"] for c in x["candidates"] if x["status"] == "ambiguous"}
+    for rid in match["unused_right"]:
+        cls, text = mark(right, row_of(rid))
+        assert text == ("候選" if row_of(rid) in candidates else "沒用到") and "m-open" in cls, (rid, text)
+    assert any(row_of(r) not in candidates for r in match["unused_right"]), "範例要有真的沒用到的列"
+    excluded = ui.state("state.result.excluded[0].row")
+    cls, text = mark(left, excluded)
+    assert text == "已排除" and "m-skip" in cls
+    # 要處理的列數寫在上方
+    open_left = left.locator("tbody tr.m-open").count()
+    assert f"{open_left} 列要處理" in left.locator(".match-legend").inner_text()
+    # 已配對的列文字淡化，要處理的列明顯
+    done = left.locator("tbody tr.m-done td:not(.mark)").first.evaluate("e => getComputedStyle(e).color")
+    plain = left.locator("tbody tr.src-header td:not(.mark)").first.evaluate("e => getComputedStyle(e).color")
+    assert done != plain
+    ui.shot("source-match-marks")
+    # 按「→ 4」：右邊跳到配到的那一列
+    paired = next(x for x in match["rows"] if x["rights"] and x["status"] != "review")
+    left.locator(f"tbody tr[data-row='{row_of(paired['left'])}'] .mark-link").click()
+    expect(right.locator("tr.src-target th.rowno")).to_have_text(str(row_of(paired["rights"][0])))
+    # 右邊按「← 6」：左邊跳回來
+    right.locator(f"tbody tr[data-row='{row_of(paired['rights'][0])}'] .mark-link").click()
+    expect(left.locator("tr.src-target th.rowno")).to_have_text(str(row_of(paired["left"])))
+
+
+def test_single_sheet_mark_opens_split(ui):
+    """只有一張表時按「→ 4」：打開並排，右邊是配到的那一列。"""
+    page = ui.run_sample()
+    page.click(".tab:has-text('原始資料')")
+    page.wait_for_selector(".tab-body .source-grid td.mark")
+    assert page.locator(".tab-body .source-pane").count() == 1
+    page.locator(".tab-body .source-grid .mark-link").first.click()
+    right = _pane(page, "右")
+    right.locator("tr.src-target").wait_for()
+    assert right.locator("select.sheet-select").input_value() == "報關單"

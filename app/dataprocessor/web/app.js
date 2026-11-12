@@ -1569,7 +1569,8 @@ async function renderSource() {
       toggle("左右並排", split, setSplit, "把兩張工作表放在左右兩邊比對，例如發票明細和報關單"),
       split ? btn({ text: "左右交換", icon: "swap", onclick: () => { [state.source, state.source2] = [state.source2, state.source]; renderSource(); } }) : null),
     el("div", { class: `source-split${split ? " two" : ""}` },
-      panes.map((src, i) => sourcePane(r, src, pages[i], split ? (i ? "右" : "左") : null))));
+      panes.map((src, i) => sourcePane(r, src, pages[i], split ? (i ? "右" : "左") : null, split ? panes[1 - i].sheet : null,
+        (place) => showPartner(i, place)))));
   body.querySelectorAll(".source-pane").forEach((pane, i) => {
     const focus = pane.querySelector(".src-cell") || pane.querySelector(".src-target");
     if (!focus) return;
@@ -1578,8 +1579,78 @@ async function renderSource() {
   });
 }
 
-function sourcePane(r, src, page, side) {
+/* 按配對欄的「→ 4」：另一邊跳到配到的那一列；只有一張表時打開並排 */
+function showPartner(index, place) {
+  const spot = { sheet: place.sheet, row: place.row, col: null, start: null };
+  if (index === 0) state.source2 = spot; else state.source = spot;
+  renderSource();
+}
+
+/* 原始表每一列的配對狀態：已配對的淡化並寫上配到哪一列，要處理的（找不到、沒用到、候選、待確認）標橘色，排除的列另外標出。
+   一張表參與好幾個配對時，用和另一邊工作表有關的那個配對，沒有並排時用第一個。 */
+function matchMarks(r, sheet, otherSheet) {
+  const sheetsOf = (table) => r.inputs[table]?.sheets || [];
+  const involved = r.matches.filter((m) => sheetsOf(m.left).includes(sheet) || sheetsOf(m.right).includes(sheet));
+  const marks = new Map();
+  const here = (rid) => { const p = sourcePlace(rid); return p && p.sheet === sheet ? p : null; };
+  const short = (places) => places.slice(0, 3).map((p) => p.row).join("、") + (places.length > 3 ? "…" : "");
+  const m = involved.find((x) => otherSheet && otherSheet !== sheet
+    && (sheetsOf(x.left).includes(otherSheet) || sheetsOf(x.right).includes(otherSheet))) || involved[0];
+  if (m) {
+    const asLeft = sheetsOf(m.left).includes(sheet);
+    for (const row of m.rows) {
+      const rights = row.rights.map(sourcePlace).filter(Boolean);
+      const left = sourcePlace(row.left);
+      const pending = row.status === "review";
+      if (asLeft) {
+        const p = here(row.left);
+        if (!p) continue;
+        if (rights.length) marks.set(p.row, { kind: pending ? "open" : "done", text: `→ ${short(rights)}`, targets: rights,
+          title: `配到${m.right_label}第 ${rights.map((x) => x.row).join("、")} 列${pending ? "，待確認" : ""}` });
+        else if (row.status === "ambiguous") {
+          const cands = row.candidates.map((c) => sourcePlace(c.rid)).filter(Boolean);
+          marks.set(p.row, { kind: "open", text: `${cands.length} 筆候選`, targets: cands, title: `有 ${cands.length} 筆可能的${m.right_label}，要選一筆` });
+        } else if (row.status === "none") marks.set(p.row, { kind: "done", text: "確認沒有", title: "已確認沒有對應" });
+        else marks.set(p.row, { kind: "open", text: "找不到", title: `找不到對應的${m.right_label}` });
+      } else {
+        for (const rid of row.rights) {
+          const p = here(rid);
+          if (!p || !left) continue;
+          const mark = marks.get(p.row) || { kind: "done", lefts: [] };
+          mark.lefts.push(left);
+          if (pending) mark.kind = "open";
+          marks.set(p.row, mark);
+        }
+        if (row.status === "ambiguous" && left) for (const c of row.candidates) {
+          const p = here(c.rid);
+          if (p && !marks.has(p.row)) marks.set(p.row, { kind: "open", text: "候選", targets: [left], title: `${m.left_label}第 ${left.row} 列的候選` });
+        }
+      }
+    }
+    if (!sheetsOf(m.left).includes(sheet)) {
+      for (const mark of marks.values()) if (mark.lefts) {
+        Object.assign(mark, { text: `← ${short(mark.lefts)}`, targets: mark.lefts,
+          title: `配到${m.left_label}第 ${mark.lefts.map((x) => x.row).join("、")} 列${mark.kind === "open" ? "，待確認" : ""}` });
+      }
+      for (const rid of m.unused_right || []) {
+        const p = here(rid);
+        if (p && !marks.has(p.row)) marks.set(p.row, { kind: "open", text: "沒用到", title: `沒有任何${m.left_label}配到這一列` });   // 是候選時寫候選
+      }
+    }
+  }
+  for (const entry of r.excluded) {   // 排除的列不參與配對
+    const p = here(entry.rid);
+    if (p) marks.set(p.row, { kind: "skip", text: "已排除", title: entry.label ? `排除：${entry.label}` : "排除" });
+  }
+  if (!marks.size) return null;
+  const open = [...marks.values()].filter((x) => x.kind === "open").length;
+  return { match: m, marks, open };
+}
+
+function sourcePane(r, src, page, side, otherSheet = null, onPartner = () => {}) {
   src.sheet = page.name;
+  const marked = matchMarks(r, page.name, otherSheet);
+  const marks = marked?.marks;
   const headers = Object.values(r.inputs).flatMap((input) => {
     const pos = input.positions?.[page.name];
     return pos ? [{ row: pos.header_row, label: input.label }] : [];
@@ -1594,14 +1665,20 @@ function sourcePane(r, src, page, side) {
   });
   const wrap = prefs.get("wrap", false);
   const table = el("table", { class: `grid source-grid${wrap ? " wrap" : ""}` },
-    el("thead", {}, el("tr", {}, el("th", { class: "corner" }), Array.from({ length: page.width }, (_, i) => el("th", {
+    el("thead", {}, el("tr", {}, el("th", { class: "corner" }), marks ? el("th", { class: "mark-col", text: "配對" }) : null,
+      Array.from({ length: page.width }, (_, i) => el("th", {
       class: i === src.col ? "target-col" : null, text: colLetter(i) })))),
     el("tbody", {}, page.rows.map((cells, offset) => {
       const number = page.start + offset;
       const header = headers.find((h) => h.row === number);
       const target = number === src.row;
-      return el("tr", { class: [header ? "src-header" : "", target ? "src-target" : ""].filter(Boolean).join(" ") || null, dataset: { row: number } },
+      const mark = marks?.get(number);
+      return el("tr", { class: [header ? "src-header" : "", target ? "src-target" : "", mark ? `m-${mark.kind}` : ""].filter(Boolean).join(" ") || null, dataset: { row: number } },
         el("th", { class: "rowno", title: header ? `${header.label}的表頭` : null, text: number }),
+        marks ? el("td", { class: "mark" }, !mark ? null : mark.targets?.length
+          ? el("button", { type: "button", class: "mark-link", text: mark.text, title: `${mark.title}，按一下在另一邊打開`,
+            onclick: () => onPartner(mark.targets[0]) })
+          : el("span", { class: "mark-text", text: mark.text, title: mark.title })) : null,
         cells.map((value, i) => el("td", { class: target && i === src.col ? "src-cell" : null, title: value || null },
           el("div", { class: "cell-text", text: value }))));
     })));
@@ -1628,6 +1705,9 @@ function sourcePane(r, src, page, side) {
     headers.length || src.row ? el("p", { class: "muted small-text source-legend" },
       headers.map((h) => `第 ${h.row} 列是「${h.label}」的表頭`).join("，"),
       src.row ? `${headers.length ? "；" : ""}標示的是第 ${src.row} 列${src.col !== null && src.col !== undefined ? `的 ${colLetter(src.col)}${src.row}` : ""}` : "") : null,
+    marked?.match ? el("p", { class: "small-text match-legend", title: "淡色：已配對。橘色：找不到、沒用到、候選或待確認。按「→ 4」在另一邊打開配到的那一列" },
+      el("span", { class: "muted", text: `配對依「${marked.match.label}」・` }),
+      marked.open ? el("span", { class: "open-count", text: `${marked.open} 列要處理` }) : el("span", { class: "muted", text: "沒有要處理的列" })) : null,
     page.rows.length ? el("div", { class: "table-wrap source-wrap" }, table) : el("div", { class: "note", text: "這張工作表沒有資料。" }));
 }
 
@@ -1660,8 +1740,10 @@ function scrollToCell(cell, page = true) {
   const at = (node) => node.getBoundingClientRect().left - box.left + wrap.scrollLeft;   // 在表格裡的水平位置
   const rect = cell.getBoundingClientRect();
   wrap.scrollTop = Math.max(0, rect.top - box.top + wrap.scrollTop - wrap.clientHeight / 2 + rect.height / 2);
-  const heads = [...wrap.querySelectorAll("thead th")];
-  const rowno = heads[0].getBoundingClientRect().width;
+  const fixed = [...wrap.querySelectorAll("thead th.corner, thead th.mark-col")];
+  const heads = [...wrap.querySelectorAll("thead th")].filter((th) => !fixed.includes(th));
+  heads.unshift(fixed[0]);
+  const rowno = fixed.reduce((sum, th) => sum + th.getBoundingClientRect().width, 0);   // 固定在左邊的寬度
   const right = at(cell) + rect.width;
   let left = 0;
   if (cell.tagName === "TD" && right > wrap.clientWidth + 1) {

@@ -637,3 +637,23 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .sheet-select { min-width: 140px; max-width: 100%; flex: 1 1 160px; height: 30px; padding: 0 8px; border: 0; border-radius: var(--radius-md, 8px);
   background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); font: inherit; font-size: 13px; color: var(--text-strong); }
 .source-split.two .source-wrap { max-height: calc(100vh - 300px); }
+
+/* 原始表的配對欄：固定在列號旁邊。已配對淡化，要處理的標橘色 */
+.source-grid th.mark-col, .source-grid td.mark { position: sticky; left: 48px; width: 78px; min-width: 78px; max-width: 78px; white-space: nowrap; }
+.source-grid th.mark-col { z-index: 3; top: 0; background: var(--well); color: var(--text); font-weight: 500; }
+.source-grid td.mark { z-index: 1; background: var(--surface); font-size: 12px; box-shadow: inset -1px 0 0 var(--line); }
+.source-grid th.mark-col { box-shadow: inset -1px 0 0 var(--line); }
+.source-grid tr.src-header td.mark { background: var(--ink-1); }
+.source-grid tr.src-target td.mark { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.mark-link { all: unset; cursor: pointer; color: var(--text); border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
+.mark-link:hover { background: var(--ink-2); color: var(--text-strong); }
+.mark-link:focus-visible { outline: 2px solid var(--accent); }
+.source-grid tr.m-done td:not(.mark) { color: var(--text-faint); }
+.source-grid tr.m-done td.mark, .source-grid tr.m-done .mark-link { color: var(--text-faint); }
+.source-grid tr.src-target.m-done td:not(.mark) { color: var(--text-strong); }
+.source-grid tr.m-open td.mark .mark-link, .source-grid tr.m-open td.mark .mark-text { color: var(--warning-text); font-weight: 600; }
+.source-grid tr.m-open td.mark { background: color-mix(in srgb, var(--warning) 12%, var(--surface)); }
+.source-grid tr.m-skip td:not(.mark) { color: var(--text-faint); text-decoration: line-through; text-decoration-color: var(--ink-4); }
+.source-grid tr.m-skip td.mark { color: var(--text-faint); }
+.match-legend { margin: -6px 0 10px; }
+.match-legend .open-count { color: var(--warning-text); font-weight: 600; }
