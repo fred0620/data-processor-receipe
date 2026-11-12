@@ -87,6 +87,16 @@ button { cursor: pointer; }
   padding: 16px 12px; display: flex; flex-direction: column; gap: 20px;
 }
 .work { min-width: 0; overflow: auto; padding: 28px 32px 48px; background: var(--well); }
+
+/* 獨立視窗：只留結果，表格用滿整個視窗 */
+body.popout .setup, body.popout .pipeline, body.popout .stage-detail, body.popout .manual-link { display: none; }
+body.popout .layout { grid-template-columns: minmax(0, 1fr); }
+body.popout .layout.with-drawer { grid-template-columns: minmax(0, 1fr) 360px; }
+body.popout .work { padding: 20px 24px 40px; }
+body.popout #result { max-width: none; }
+body.popout .tabs { margin-top: 12px; }
+.tabs .tab-tools { margin-left: auto; display: flex; align-items: center; gap: 10px; padding-bottom: 6px; }
+.tab-tools .muted { font-size: 12px; }
 #result { max-width: 1400px; margin: 0 auto; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .panel h2 { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; }

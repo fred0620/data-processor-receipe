@@ -325,8 +325,74 @@ async function act(path, body) {
   } catch (error) { showError(error); return false; }
 }
 
-function setResult(result, fresh = false) {
+/* ---------- 獨立視窗（pop out / pop in） ---------- */
+/* 結果可以開在另一個瀏覽器視窗，拖到另一個螢幕看完整的表格。
+   每個視窗都能修改；任何一個視窗更新結果，其他視窗用 BroadcastChannel 同步，不必重新整理。 */
+const pageParams = new URLSearchParams(location.search);
+const isPopout = pageParams.has("run");
+const channel = window.BroadcastChannel ? new BroadcastChannel("dataprocessor") : null;
+const popups = new Set();
+
+function popOut() {
+  const r = state.result;
+  const url = `/?run=${encodeURIComponent(r.run_id)}&tab=${encodeURIComponent(state.tab)}`;
+  const w = Math.min(screen.availWidth, 1600), h = Math.min(screen.availHeight, 1000);
+  const win = window.open(url, `dp-${r.run_id}-${Date.now()}`, `popup,width=${w},height=${h}`);
+  if (!win) { toast("瀏覽器擋下了新視窗，請允許這個網站開啟彈出式視窗後再試一次", true); return; }
+  popups.add(win);
+  renderTabs();
+}
+
+function popInAll() {
+  for (const win of popups) if (!win.closed) win.close();
+  popups.clear();
+  renderTabs();
+}
+
+function openPopups() {
+  for (const win of popups) if (win.closed) popups.delete(win);
+  return popups.size;
+}
+
+function popIn() {
+  channel?.postMessage({ type: "popin", tab: state.tab, run_id: state.result?.run_id });
+  window.close();
+  // 不是由主視窗開的（例如重新整理過），關不掉時就回到一般畫面
+  setTimeout(() => { location.href = "/"; }, 300);
+}
+
+channel?.addEventListener("message", ({ data }) => {
+  if (data.type === "result") {
+    const same = state.result && state.result.run_id === data.result.run_id;
+    if (same) setResult(data.result, false, true);
+    else if (isPopout) setResult(data.result, true, true);   // 主視窗換了新的處理，獨立視窗跟著換
+  } else if (data.type === "popin" && !isPopout) {
+    if (state.result && data.run_id === state.result.run_id) { state.tab = data.tab; renderTabs(); }
+    window.focus();
+  } else if (data.type === "closed" && !isPopout) {
+    renderTabs();
+  }
+});
+
+async function startPopout() {
+  document.body.classList.add("popout");
+  $("popInButton").hidden = false;
+  $("popInButton").addEventListener("click", popIn);
+  window.addEventListener("pagehide", () => channel?.postMessage({ type: "closed" }));
+  try {
+    setResult(await api(`/api/runs/${encodeURIComponent(pageParams.get("run"))}`), true, true);
+    const tab = pageParams.get("tab");
+    if (tab) { state.tab = tab; renderTabs(); }
+  } catch (error) {
+    put($("empty"), el("h2", { text: "這個結果已經不在了" }),
+      el("p", { class: "muted", text: "工具重新啟動過，或主視窗已經換成別的處理。請關閉這個視窗，回到主視窗重新執行。" }));
+  }
+}
+
+function setResult(result, fresh = false, remote = false) {
+  if (!remote) channel?.postMessage({ type: "result", result });
   state.result = result;
+  if (isPopout) document.title = `${result.recipe.name}・${result.workbook.name}`;
   state.traces = {};
   if (fresh) {
     state.tab = result.status === "error" ? "issues" : "rows";
@@ -431,9 +497,14 @@ function renderTabs() {
     ["issues", "所有警示", open],
   ].filter(Boolean);
   if (!tabs.some((t) => t[0] === state.tab)) state.tab = "rows";
+  const opened = isPopout ? 0 : openPopups();
   put($("tabs"), tabs.map(([id, label, n, plain]) => el("button", {
     type: "button", class: `tab${state.tab === id ? " active" : ""}`, onclick: () => { state.tab = id; state.issueFocus = null; renderTabs(); },
-  }, label, n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)));
+  }, label, n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)),
+  isPopout ? null : el("div", { class: "tab-tools" },
+    opened ? el("span", { class: "muted", text: `已開 ${opened} 個視窗` }) : null,
+    opened ? el("button", { type: "button", class: "ghost small", text: "全部放回", onclick: popInAll }) : null,
+    el("button", { type: "button", class: "ghost small", text: "新視窗 ↗", title: "在另一個視窗開啟結果，可以拖到另一個螢幕看完整的表格。兩邊的修改會同步。", onclick: popOut })));
   ({ rows: renderRows, match: renderMatch, mapping: renderMapping, excluded: renderExcluded, issues: renderIssues })[state.tab]();
   renderDrawer();
 }
@@ -967,6 +1038,12 @@ function bind() {
 async function main() {
   watchConnection();
   bind();
+  if (isPopout) {
+    const status = await api("/api/status").catch(() => ({}));
+    $("version").textContent = status.version ? `v${status.version}` : "";
+    await startPopout();
+    return;
+  }
   try {
     const status = await api("/api/status");
     $("version").textContent = status.version ? `v${status.version}` : "";
