@@ -389,7 +389,19 @@ async function startPopout() {
   }
 }
 
+/* 另一個視窗更新時，若這個視窗正在打字（細節的欄位、搜尋框），先不重畫，離開輸入框後再更新，打到一半的字不會不見 */
+function isTyping() {
+  const node = document.activeElement;
+  return Boolean(node && node.matches("input:not([type=checkbox]):not([type=file]), textarea, select") && node.closest("#result, #drawer"));
+}
+let pendingRemote = null;
+document.addEventListener("focusout", () => setTimeout(() => {
+  if (pendingRemote && !isTyping()) { const next = pendingRemote; pendingRemote = null; setResult(next.result, next.fresh, true); }
+}, 0), true);
+
 function setResult(result, fresh = false, remote = false) {
+  if (remote && isTyping()) { pendingRemote = { result, fresh }; return; }
+  pendingRemote = null;
   if (!remote) channel?.postMessage({ type: "result", result });
   state.result = result;
   if (isPopout) document.title = `${result.recipe.name}・${result.workbook.name}`;
@@ -502,9 +514,9 @@ function renderTabs() {
     type: "button", class: `tab${state.tab === id ? " active" : ""}`, onclick: () => { state.tab = id; state.issueFocus = null; renderTabs(); },
   }, label, n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)),
   isPopout ? null : el("div", { class: "tab-tools" },
-    opened ? el("span", { class: "muted", text: `已開 ${opened} 個視窗` }) : null,
-    opened ? el("button", { type: "button", class: "ghost small", text: "全部放回", onclick: popInAll }) : null,
-    el("button", { type: "button", class: "ghost small", text: "新視窗 ↗", title: "在另一個視窗開啟結果，可以拖到另一個螢幕看完整的表格。兩邊的修改會同步。", onclick: popOut })));
+    opened ? el("span", { class: "muted", text: `${opened} 個 pop out 視窗` }) : null,
+    opened ? el("button", { type: "button", class: "ghost small", text: "全部 Pop in", onclick: popInAll }) : null,
+    el("button", { type: "button", class: "ghost small", text: "Pop out ↗", title: "在另一個視窗開啟結果，可以拖到另一個螢幕看完整的表格。兩邊的修改會同步。", onclick: popOut })));
   ({ rows: renderRows, match: renderMatch, mapping: renderMapping, excluded: renderExcluded, issues: renderIssues })[state.tab]();
   renderDrawer();
 }

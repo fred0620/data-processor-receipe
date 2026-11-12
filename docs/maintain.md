@@ -31,6 +31,7 @@ bash run.sh                                # 或 Windows 雙擊 run.bat，用使
 | 改了使用手冊或換版說明後重建 HTML | `uv run --project app python scripts/build_manual.py` |
 | 新增套件 | `uv add --project app 套件名稱` |
 | 試打包（不含離線套件） | `uv run --project app python scripts/build_release.py` |
+| 瀏覽器操作測試（Pop out 視窗） | `uv run --project app --with playwright python -m playwright install chromium`，再 `uv run --project app --with playwright pytest tests/test_ui_popout.py`。沒有 playwright 時一般的 `pytest tests` 會顯示略過；推到 GitHub 會自動跑 |
 | 換版與退回測試 | 包含在 `pytest tests` 裡（`tests/test_release.py`），只在 Windows 上實際執行；沒有 Python 的 Windows 電腦可以直接跑 `powershell -ExecutionPolicy Bypass -File tests\release\test_update.ps1`（加 `-Zip 發布包.zip` 測實際的發布包） |
 
 規則：
