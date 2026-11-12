@@ -603,11 +603,11 @@ function setResult(result, fresh = false, remote = false) {
   const rows = result.output.rows;
   const reviewRows = rows.filter((r) => r.status === "review").length;
   $("resultSub").textContent = result.status === "error" ? `${result.workbook.name}・無法執行`
-    : `${result.workbook.name}・${rows.length} 列・${reviewRows} 列需檢查`;
+    : `${result.workbook.name}・${rows.length} 列`;
   const status = $("runStatus");
   status.hidden = false;
-  put(status, el("span", { class: `dot ${result.status}` }),
-    { ok: "全部正常", review: `${result.counts.review} 個地方需檢查`, error: "無法執行" }[result.status] || "全部正常");
+  put(status, el("span", { class: `dot ${result.status === "error" ? "error" : reviewRows ? "review" : "ok"}` }),
+    result.status === "error" ? "無法執行" : reviewRows ? `${reviewRows} 列需檢查` : "全部處理完");
   renderProgress(result);
   $("exportButton").href = `/api/runs/${result.run_id}/export`;
   resetButton(result);
@@ -789,8 +789,14 @@ function visibleColumns() {
 function columnMenu() {
   const recipeId = state.result.recipe.id;
   const hidden = new Set(prefs.get(`hidden:${recipeId}`, []));
-  const menu = el("details", { class: "menu" }, el("summary", { class: "button ghost small" }, icon("columns"), el("span", { text: `欄位${hidden.size ? `（隱藏 ${hidden.size}）` : ""}` })),
-    el("div", { class: "menu-body" },
+  const wrap = prefs.get("wrap", false);
+  const dense = prefs.get("dense", false);
+  const menu = el("details", { class: "menu" }, el("summary", { class: "button ghost small" }, icon("columns"), el("span", { text: `檢視${hidden.size ? `（隱藏 ${hidden.size} 欄）` : ""}` })),
+  el("div", { class: "menu-body" },
+    el("div", { class: "menu-switches" },
+      toggle("換行", wrap, (on) => { prefs.set("wrap", on); renderRows(true); }, "儲存格有多行時換行顯示（最多 4 行）；關閉時壓成一行"),
+      toggle("緊湊", dense, (on) => { prefs.set("dense", on); renderRows(true); }, "縮小列高，一次看更多列")),
+    el("div", { class: "menu-title", text: "顯示的欄位" }),
       state.result.output.columns.map((c) => {
         const box = el("input", { type: "checkbox", checked: !hidden.has(c.name) });
         box.addEventListener("change", () => {
@@ -859,21 +865,40 @@ function renderRows(keepMenu = false) {
       searchBox(state.search, "搜尋", (v) => { state.search = v; renderRows(); }, "rows"),
       el("span", { class: "spacer" }),
       el("span", { class: "muted", text: `${rows.length} 列` }),
-      menu,
-      toggle("換行", wrap, (on) => { prefs.set("wrap", on); renderRows(); }, "儲存格有多行時換行顯示（最多 4 行）；關閉時壓成一行"),
-      toggle("緊湊", dense, (on) => { prefs.set("dense", on); renderRows(); }, "縮小列高，一次看更多列")),
+      menu),
     rows.length ? el("div", { class: "table-wrap" }, table)
       : el("div", { class: "note", text: state.filter === "review" ? "沒有需要檢查的列。" : "沒有符合的列。" }),
     rows.length > 2000 ? el("p", { class: "muted", text: "只顯示前 2000 列，請用搜尋縮小範圍。" }) : null);
 }
 
 /* ---------- 單列細節 ---------- */
-function issueLine(issue, extra = null) {
+/* 警示對應到「對照表」分頁的哪一筆待補 */
+function unmappedEntry(issue) {
+  return state.result.unmapped.find((u) => issue.message.startsWith(`「${u.raw}」不在對照表 ${u.mapping}`)) || null;
+}
+
+/* 細節裡的「不在對照表」：直接選對應值儲存，補上的對照之後其他列、其他檔案都會用到 */
+function inlineMapping(entry) {
+  const control = targetControl(entry.allowed);
+  const save = () => {
+    const { target, new_value } = control.read(control.node);
+    if (!target) { toast("請選擇或輸入對應值", true); return; }
+    act("mapping", { mapping: entry.mapping, raw: entry.raw, target, new_value });
+  };
+  return el("div", { class: "inline-fix" }, control.node,
+    el("button", { type: "button", class: "small", text: "補上對照", onclick: save }),
+    entry.count > 1 ? el("span", { class: "muted", text: `其他 ${entry.count - 1} 處也會一起補上` }) : null);
+}
+
+function issueLine(issue, extra = null, inline = false) {
   const actions = [];
   if (issue.ref && issue.rid && state.result.matches.some((m) => m.name === issue.ref)) {
     actions.push(el("button", { type: "button", class: "link", text: "前往配對", onclick: () => focusMatch(issue.ref, issue.rid.split("|")[0]) }));
   }
-  if (issue.code === "unmapped" && !issue.resolved) actions.push(el("button", { type: "button", class: "link", text: "補對照", onclick: () => goTo({ tab: "mapping" }) }));
+  const entry = issue.code === "unmapped" && !issue.resolved ? unmappedEntry(issue) : null;
+  if (issue.code === "unmapped" && !issue.resolved && !(inline && entry)) {
+    actions.push(el("button", { type: "button", class: "link", text: "補對照", onclick: () => goTo({ tab: "mapping" }) }));
+  }
   if (extra) actions.push(extra);
   if (issue.level !== "error" && !issue.resolved) {   // 修改、補對照、配對要到原本的地方還原
     actions.push(el("button", {
@@ -885,6 +910,7 @@ function issueLine(issue, extra = null) {
     el("span", { class: `dot ${issue.level}` }),
     el("div", { class: "body" }, el("div", { class: "message", text: issue.message }),
       issue.note ? el("div", { class: "resolution", text: `→ ${issue.note}` }) : null,
+      inline && entry ? inlineMapping(entry) : null,
       el("div", { class: "issue-actions" }, el("span", { class: "meta", text: `${STAGE_TEXT[issue.stage] || issue.stage}${issue.dismissed ? `・${handledText(issue)}` : ""}` }), actions)));
 }
 
@@ -946,55 +972,78 @@ function renderDrawer() {
   });
   put($("drawerBody"),
     ...[["需要注意", issues.filter((i) => !i.dismissed)], ["處理紀錄", issues.filter((i) => i.dismissed)]].map(([title, list]) =>
-      list.length ? el("section", {}, el("h4", { class: "section-title", text: title }), el("div", { class: "list" }, list.map((i) => issueLine(i)))) : null),
+      list.length ? el("section", {}, el("h4", { class: "section-title", text: title }), el("div", { class: "list" }, list.map((i) => issueLine(i, null, true)))) : null),
     el("section", {}, el("h4", { class: "section-title", text: "欄位" }), el("p", { class: "muted small-text", style: "margin:-4px 0 10px", text: "修改後按 Enter 儲存（Shift+Enter 換行），會保留原值。" }), fields),
     el("section", {}, rowStory),
     sourceSection(row));
     renderDrawerFoot(row);
     }
 
-    /* 檢查流程：細節下方固定一列，看完這一列直接到下一列 */
-    function neighbors(rid) {
-      const list = visibleRows();
-      const index = list.findIndex((x) => x.rid === rid);
-      return { list, index, prev: index > 0 ? list[index - 1] : null, next: index >= 0 ? list[index + 1] || null : list[0] || null };
-    }
+/* 檢查流程：細節下方固定一列，看完這一列直接到下一列 */
+function neighbors(rid) {
+  const list = visibleRows();
+  const index = list.findIndex((x) => x.rid === rid);
+  return { list, index, prev: index > 0 ? list[index - 1] : null, next: index >= 0 ? list[index + 1] || null : list[0] || null };
+}
 
-    function selectRow(rid) {
-      closePeek();
-      state.selected = rid;
-      renderTabs();
-      requestAnimationFrame(() => document.querySelector("table.grid tr.selected")?.scrollIntoView({ block: "nearest" }));
-    }
+function selectRow(rid) {
+  closePeek();
+  state.selected = rid;
+  renderTabs();
+  requestAnimationFrame(() => document.querySelector("table.grid tr.selected")?.scrollIntoView({ block: "nearest" }));
+}
 
-    async function confirmAndNext(row) {
-      const { list, index } = neighbors(row.rid);
-      const after = list[index + 1] || null;
-      const keys = row.issues.map((i) => state.result.issues[i]).filter((i) => !i.dismissed && i.level === "review" && !i.resolved).map((i) => i.key);
-      if (keys.length && !(await act("dismiss", { keys, on: true }))) return;
-      /* 篩選「需檢查」時，確認過的列會離開清單，下一筆就是原本排在它後面的那一列 */
-      const still = new Set(visibleRows().map((x) => x.rid));
-      const next = (after && still.has(after.rid) && after) || visibleRows().find((x, i) => i >= Math.max(index, 0)) || null;
-      selectRow(next ? next.rid : null);
-      if (!next) toast(state.filter === "review" ? "需檢查的列都處理完了" : "已經是最後一列");
-    }
+/* 一鍵確認只給「要人判斷」的警示（金額不一致、配對要確認）。
+   缺資料或要做決定的（找不到配對、不在對照表、讀不懂、必填空白…）一定要先處理，
+   不能被「確認無誤，下一筆」順手確認掉；真的沒問題時，還是可以在那個警示上個別按「確認無誤」。 */
+const MUST_HANDLE = new Set(["required", "extract", "parse", "unmapped", "match_ambiguous", "match_none", "match_overflow",
+  "match_shared", "manual_lost", "manual_shared", "edit_stale", "gate_all"]);
+const mustHandle = (issue) => MUST_HANDLE.has(issue.code);
 
-    function renderDrawerFoot(row) {
-      const { list, index, prev, next } = neighbors(row.rid);
-      const open = row.issues.map((i) => state.result.issues[i]).filter((i) => !i.dismissed && i.level === "review" && !i.resolved);
-      put($("drawerFoot"),
-        el("div", { class: "foot-nav" },
-          btn({ icon: "up", label: "上一筆（K）", disabled: !prev, onclick: () => selectRow(prev.rid) }),
-          btn({ icon: "down", label: "下一筆（J）", disabled: !next, onclick: () => selectRow(next.rid) }),
-          el("span", { class: "foot-count", text: index >= 0 ? `${FILTER_TEXT[state.filter]} ${index + 1} / ${list.length}` : `不在「${FILTER_TEXT[state.filter]}」裡` })),
-        open.length
-          ? el("button", { type: "button", class: "primary small", title: "確認這一列的警示都沒問題，然後看下一筆（Shift+Enter 以外的 Enter 在欄位裡是儲存）",
-            onclick: () => confirmAndNext(row) }, icon("check"), el("span", { text: open.length > 1 ? `確認 ${open.length} 個警示，下一筆` : "確認無誤，下一筆" }))
-          : el("button", { type: "button", class: "small", disabled: !next, onclick: () => next && selectRow(next.rid) },
-            el("span", { text: "下一筆" }), kbd("J")));
-    }
+function openIssues(row) {
+  return row.issues.map((i) => state.result.issues[i]).filter((i) => !i.dismissed && i.level === "review" && !i.resolved);
+}
 
-    /* 這一列在原始 Excel 的哪裡：主要的輸入表，加上配對帶進來的其他表。點了在旁邊跳出小卡 */
+async function confirmAndNext(row) {
+  const { list, index } = neighbors(row.rid);
+  const after = list[index + 1] || null;
+  const keys = openIssues(row).filter((i) => !mustHandle(i)).map((i) => i.key);
+  if (keys.length && !(await act("dismiss", { keys, on: true }))) return;
+  /* 篩選「需檢查」時，確認過的列會離開清單，下一筆就是原本排在它後面的那一列 */
+  const still = new Set(visibleRows().map((x) => x.rid));
+  const next = (after && still.has(after.rid) && after) || visibleRows().find((x, i) => i >= Math.max(index, 0)) || null;
+  selectRow(next ? next.rid : null);
+  if (!next) toast(state.filter === "review" ? "需檢查的列都處理完了" : "已經是最後一列");
+}
+
+function renderDrawerFoot(row) {
+  const { list, index, prev, next } = neighbors(row.rid);
+  const open = openIssues(row);
+  const blocking = open.filter(mustHandle);
+  const judge = open.filter((i) => !mustHandle(i));
+  let action;
+  if (blocking.length) {
+    /* 還有要處理的：不給一鍵確認，告訴他還剩什麼；要跳過也可以 */
+    action = el("div", { class: "foot-action" },
+      el("span", { class: "foot-todo" }, el("span", { class: "dot review" }), `還有 ${blocking.length} 個要處理`),
+      el("button", { type: "button", class: "small", disabled: !next, title: "先跳過這一列，之後再回來", onclick: () => next && selectRow(next.rid) },
+        el("span", { text: "跳過" }), kbd("J")));
+  } else if (judge.length) {
+    action = el("button", { type: "button", class: "primary small", title: "確認這一列的警示都沒問題，然後看下一筆",
+      onclick: () => confirmAndNext(row) }, icon("check"), el("span", { text: judge.length > 1 ? `確認 ${judge.length} 個警示，下一筆` : "確認無誤，下一筆" }));
+  } else {
+    action = el("button", { type: "button", class: "small", disabled: !next, onclick: () => next && selectRow(next.rid) },
+      el("span", { text: "下一筆" }), kbd("J"));
+  }
+  put($("drawerFoot"),
+    el("div", { class: "foot-nav" },
+      btn({ icon: "up", label: "上一筆（K）", disabled: !prev, onclick: () => selectRow(prev.rid) }),
+      btn({ icon: "down", label: "下一筆（J）", disabled: !next, onclick: () => selectRow(next.rid) }),
+      el("span", { class: "foot-count", text: index >= 0 ? `${FILTER_TEXT[state.filter]} ${index + 1} / ${list.length}` : `不在「${FILTER_TEXT[state.filter]}」裡` })),
+    action);
+}
+
+/* 這一列在原始 Excel 的哪裡：主要的輸入表，加上配對帶進來的其他表。點了在旁邊跳出小卡 */
 function sourceSection(row) {
   const places = [row.source, ...Object.values(row.links || {})].map(sourcePlace).filter(Boolean);
   return el("section", {}, el("h4", { class: "section-title", text: "原始 Excel" }),
@@ -1531,8 +1580,9 @@ function renderIssues() {
       const row = rowOf.get(issue.id);
       const box = el("input", { type: "checkbox", checked: state.checked.has(issue.key), disabled: issue.level === "error" || Boolean(issue.resolved) });
       box.addEventListener("change", () => { box.checked ? state.checked.add(issue.key) : state.checked.delete(issue.key); renderTabs(); });
+      const name = row ? row.values[state.result.output.columns[0]?.name] : null;
       return el("div", { class: "issue-row" }, box, issueLine(issue, row ? el("button", {
-        type: "button", class: "link", text: `第 ${row.row ?? "?"} 列`,
+        type: "button", class: "link", text: `第 ${row.row ?? "?"} 列${name ? `・${name}` : ""}`,
         onclick: () => goTo({ tab: "rows", filter: "all", selected: row.rid }),
       }) : null));
     })) : el("div", { class: "note", text: "沒有警示。" }));

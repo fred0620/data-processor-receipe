@@ -88,6 +88,16 @@ class Ui:
     def field(self, name, page=None):
         return (page or self.page).locator(f"#drawer .field:has(label:text-is('{name}'))")
 
+    def view(self, name, page=None):
+        """結果表的「檢視」選單裡切換開關（換行、緊湊），切完收起選單。"""
+        page = page or self.page
+        menu = page.locator("details.menu").first
+        if not menu.evaluate("e => e.open"):
+            page.click("summary:has-text('檢視')")
+        page.click(f".menu-body [role=switch]:has-text('{name}')")
+        if page.locator("details.menu").first.evaluate("e => e.open"):
+            page.click("summary:has-text('檢視')")
+
     def settle(self, page=None):
         (page or self.page).wait_for_timeout(900)
 

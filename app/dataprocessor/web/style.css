@@ -216,21 +216,23 @@ button .icon, .button .icon { width: 14px; height: 14px; flex: none; fill: none;
 .actions { display: flex; gap: 8px; }
 
 /* ---------- 流程：卡片只放摘要，點開看細節 ---------- */
-.pipeline { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+/* 流程：一條精簡的步驟列，把畫面留給要檢查的資料。沒問題的步驟只顯示名稱，有狀況的才顯示摘要；點開看細節 */
+.pipeline { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .stage {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; min-height: 64px; padding: 10px 12px;
-  background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
-  text-align: left; white-space: normal;
+  display: inline-flex; flex-direction: row; align-items: center; gap: 8px; min-height: 30px; padding: 0 12px;
+  background: var(--surface); border-radius: var(--radius-pill); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
+  text-align: left; white-space: nowrap;
 }
+.stage.ok .summary, .stage.skip .summary { display: none; }
 .stage:hover:not(:disabled) { background: var(--surface); box-shadow: var(--shadow-window); }
 .stage .label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
-.stage .summary { font-size: 12.5px; font-weight: 400; color: var(--text); line-height: 1.4; }
+.stage .summary { font-size: 12px; font-weight: 400; color: var(--text); line-height: 1.4; }
 .stage.review .summary { color: var(--warning-text); }
 .stage.confirmed .summary { color: var(--accent-text); }
 .stage.error { background: var(--danger-soft); }
 .stage.error .summary { color: var(--danger-text); }
 .stage.skip { opacity: .5; }
-.stage.open, .stage.open:hover:not(:disabled) { box-shadow: 0 0 0 1.5px var(--text-strong); }
+.stage.open, .stage.open:hover:not(:disabled) { box-shadow: inset 0 0 0 1.5px var(--text-strong); }
 .stage-detail {
   margin-top: 8px; padding: 14px 18px; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-card);
 }
@@ -604,3 +606,15 @@ button.confirming, button.confirming:hover:not(:disabled) { background: var(--da
 .progress-text { font-size: 12px; color: var(--text); }
 kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px;
   border-radius: 4px; background: var(--ink-2); box-shadow: inset 0 -1px 0 var(--ink-4); font: 500 10.5px/1 var(--mono); color: var(--text); }
+.foot-action { display: flex; align-items: center; gap: 10px; }
+.foot-todo { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--warning-text); white-space: nowrap; }
+
+/* 細節裡直接補對照 */
+.inline-fix { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.inline-fix .target { display: flex; gap: 6px; min-width: 0; }
+.inline-fix select, .inline-fix input { min-height: 28px; max-width: 170px; }
+.inline-fix .muted { font-size: 11.5px; }
+/* 檢視選單：開關在上，欄位在下 */
+.menu-switches { display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
+.menu-switches .switch { justify-content: flex-start; width: 100%; }
+.menu-title { padding: 2px 6px 4px; font-size: 11.5px; color: var(--text); }

@@ -40,14 +40,14 @@ def test_pop_out_moves_the_tab_and_keeps_windows_in_sync(ui):
     assert rows.count() == 2
     w.fill("input.search", "")
     w.wait_for_timeout(400)
-    w.click("summary:has-text('欄位')")
+    w.click("summary:has-text('檢視')")
     w.click(".menu-body label:has-text('匯率') input")
     assert "匯率" not in w.locator("table.grid thead th").all_inner_texts()
     w.click(".menu-body label:has-text('匯率') input")
-    w.click("summary:has-text('欄位')")
-    w.click("[role=switch]:has-text('換行')")
+    w.click("summary:has-text('檢視')")
+    ui.view('換行', page=w)
     assert w.locator("table.grid.wrap").count() == 1
-    w.click("[role=switch]:has-text('換行')")
+    ui.view('換行', page=w)
 
     # 在 pop out 視窗修改 → 主視窗同步
     ui.row("INV-1006", page=w).click()

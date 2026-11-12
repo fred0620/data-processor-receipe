@@ -48,13 +48,63 @@ def test_keyboard_and_buttons_move_between_rows(ui):
     qty.press("Escape")
 
 
-def test_finishing_all_rows(ui):
+def test_must_handle_issues_cannot_be_bulk_confirmed(ui):
+    """缺資料或要做決定的警示（不在對照表、找不到配對）不能被「確認無誤，下一筆」順手確認掉。"""
     page = ui.run_sample()
-    for _ in range(12):
-        if not page.locator(".drawer-foot button.primary").count():
-            break
-        page.click(".drawer-foot button.primary")
-        ui.settle()
-    assert _open_count(ui) == 0
-    assert "都已處理，可以下載" in page.inner_text("#progress")
-    assert page.is_visible(".note:has-text('沒有需要檢查的列')")
+    ui.row("INV-1005").click()                       # 運送方式「陸運」不在對照表，也找不到報關單
+    foot = page.locator(".drawer-foot")
+    assert foot.locator("button.primary").count() == 0
+    assert "還有 2 個要處理" in foot.inner_text()
+    before = _open_count(ui)
+    foot.locator("button:has-text('跳過')").click()
+    assert _open_count(ui) == before and ui.state("state.selected") != "invoice:8", "跳過不會確認任何東西"
+    # 處理掉：補上對照，找不到配對的那個還在，仍然不能一鍵確認
+    ui.row("INV-1005").click()
+    issue = page.locator("#drawer .issue:has-text('不在對照表')")
+    issue.locator(".inline-fix select").select_option("SEA")
+    issue.locator("button:has-text('補上對照')").click()
+    ui.settle()
+    assert "還有 1 個要處理" in page.inner_text(".drawer-foot")
+    # 真的沒問題時，還是可以在那個警示上個別確認
+    page.locator("#drawer .issue:has-text('找不到') .link:text-is('確認無誤')").click()
+    ui.settle()
+    assert ui.state("state.result.output.rows.find(r => r.rid === 'invoice:8').status") == "confirmed"
+    ui.shot("must-handle")
+
+
+def test_judgement_rows_confirm_in_one_click(ui):
+    page = ui.run_sample()
+    ui.row("INV-1003").click()                       # 只有「金額不一致」要人判斷
+    page.click(".drawer-foot button.primary:has-text('確認無誤，下一筆')")
+    ui.settle()
+    assert ui.state("state.result.output.rows.find(r => r.rid === 'invoice:6').status") == "confirmed"
+    assert ui.state("state.selected") != "invoice:6"
+
+
+def test_fill_mapping_inside_the_row(ui):
+    """不在對照表：直接在細節裡補，不用離開正在檢查的列。"""
+    page = ui.run_sample()
+    ui.row("INV-1005").click()
+    issue = page.locator("#drawer .issue:has-text('不在對照表')")
+    assert issue.locator(".inline-fix select").count() == 1
+    assert issue.locator("button.link:text-is('補對照')").count() == 0
+    issue.locator(".inline-fix select").select_option("SEA")
+    issue.locator("button:has-text('補上對照')").click()
+    ui.settle()
+    assert ui.state("state.tab") == "rows" and ui.state("state.selected") == "invoice:8"
+    assert ui.state("state.result.output.rows.find(r => r.rid === 'invoice:8').values['運送方式']") == "SEA"
+    assert "已補對照" in page.inner_text("#drawer")
+
+
+def test_one_number_for_progress(ui):
+    """同一件事只用一種單位（列）：右上角、進度、結果分頁的數字一致。"""
+    page = ui.run_sample()
+    rows = ui.state("state.result.output.rows.filter(r => r.status === 'review').length")
+    assert page.inner_text("#runStatus").strip() == f"{rows} 列需檢查"
+    assert page.locator(".tab:has-text('結果') .count").inner_text() == str(rows)
+    assert f"/ {rows} 列" in page.inner_text("#progress")
+    # 流程列：沒問題的步驟只顯示名稱，有狀況的才顯示摘要
+    assert not page.locator("#pipeline .stage.ok .summary").first.is_visible()
+    assert page.locator("#pipeline .stage.review .summary").first.is_visible()
+    height = page.locator("#pipeline").bounding_box()["height"]
+    assert height <= 72, f"流程列太高（{height}px），會擠掉要檢查的資料"

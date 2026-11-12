@@ -28,12 +28,12 @@ def test_multiline_cells_stay_tidy(ui):
     plain = ui.row("INV-1001").bounding_box()["height"]
     one_line = ui.row("INV-1003").bounding_box()["height"]
     assert abs(one_line - plain) <= 2, "壓成一行時，多行的格子不應該讓這一列變高"
-    page.click("[role=switch]:has-text('換行')")
+    ui.view('換行')
     cell = ui.row("INV-1003").locator("td .cell-text").nth(2)
     lines = cell.evaluate("e => Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight))")
     assert 2 <= lines <= 4, f"換行顯示最多 4 行，實際 {lines} 行"
     ui.shot("multiline-wrap")
-    page.click("[role=switch]:has-text('換行')")
+    ui.view('換行')
     ui.row("INV-1003").click()
     area = ui.field("品名").locator("textarea")
     assert area.evaluate("e => e.offsetHeight") > 40, "細節的文字框要長高顯示多行"
@@ -116,12 +116,17 @@ def test_controls_follow_stageshow(ui):
         assert card.locator(".primary").count() <= 1, "一張配對卡片最多一個強調色按鈕"
     page.click(".tab:has-text('結果')")
     # 開或關的設定用開關（Toggle）
-    wrap = page.locator("[role=switch]:has-text('換行')")
+    page.click("summary:has-text('檢視')")
+    wrap = page.locator(".menu-body [role=switch]:has-text('換行')")
     assert wrap.get_attribute("aria-checked") == "false"
     wrap.click()
-    assert page.locator("[role=switch]:has-text('換行')").get_attribute("aria-checked") == "true"
+    assert page.locator(".menu-body [role=switch]:has-text('換行')").get_attribute("aria-checked") == "true"
     assert page.locator("table.grid.wrap").count() == 1
-    page.locator("[role=switch]:has-text('換行')").click()
+    page.locator(".menu-body [role=switch]:has-text('換行')").click()
+    page.click("summary:has-text('檢視')")
+    # 工具列一行放得下（細節打開時也是）
+    height = page.locator(".tab-body > .toolbar").first.bounding_box()["height"]
+    assert height <= 40, f"結果表的工具列不應該折成兩行（{height}px）"
     # 警示裡的動作維持原本的文字連結
     assert page.locator("#drawer .issue .link:text-is('確認無誤')").count() >= 1
     # 進度（Meter）

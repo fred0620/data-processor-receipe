@@ -39,20 +39,20 @@ def test_table_tools_and_colors(ui):
     assert rows.count() == 1
     page.fill("input.search", "")
     page.wait_for_timeout(400)
-    page.click("summary:has-text('欄位')")
+    page.click("summary:has-text('檢視')")
     page.click(".menu-body label:has-text('匯率') input")
     assert "匯率" not in page.locator("table.grid thead th").all_inner_texts()
     assert page.is_visible(".menu-body")                                    # 勾選時選單不會收起
     page.click(".menu-body label:has-text('匯率') input")
-    page.click("summary:has-text('欄位')")
-    page.click("[role=switch]:has-text('換行')")
+    page.click("summary:has-text('檢視')")
+    ui.view('換行')
     multi = ui.row("INV-1003").locator("td .cell-text").nth(2)
     assert "附電源線" in multi.inner_text() and "↵" not in multi.inner_text()
-    page.click("[role=switch]:has-text('換行')")
+    ui.view('換行')
     assert "↵" in ui.row("INV-1003").locator("td .cell-text").nth(2).inner_text()
-    page.click("[role=switch]:has-text('緊湊')")
+    ui.view('緊湊')
     assert page.locator("table.grid.dense").count() == 1
-    page.click("[role=switch]:has-text('緊湊')")
+    ui.view('緊湊')
     # 確認一列後變成藍色的已確認
     ui.row("INV-1008").click()
     ui.field("幣別").locator("..").page.locator("#drawer button:has-text('確認無誤')").first.click()
