@@ -45,14 +45,14 @@ def test_table_tools_and_colors(ui):
     assert page.is_visible(".menu-body")                                    # 勾選時選單不會收起
     page.click(".menu-body label:has-text('匯率') input")
     page.click("summary:has-text('欄位')")
-    page.click("button[aria-pressed]:has-text('換行')")
+    page.click("[role=switch]:has-text('換行')")
     multi = ui.row("INV-1003").locator("td .cell-text").nth(2)
     assert "附電源線" in multi.inner_text() and "↵" not in multi.inner_text()
-    page.click("button[aria-pressed]:has-text('換行')")
+    page.click("[role=switch]:has-text('換行')")
     assert "↵" in ui.row("INV-1003").locator("td .cell-text").nth(2).inner_text()
-    page.click("button[aria-pressed]:has-text('緊湊')")
+    page.click("[role=switch]:has-text('緊湊')")
     assert page.locator("table.grid.dense").count() == 1
-    page.click("button[aria-pressed]:has-text('緊湊')")
+    page.click("[role=switch]:has-text('緊湊')")
     # 確認一列後變成藍色的已確認
     ui.row("INV-1008").click()
     ui.field("幣別").locator("..").page.locator("#drawer button:has-text('確認無誤')").first.click()
@@ -97,7 +97,7 @@ def test_drawer_edit_revert_multiline_and_trace(ui):
     ui.settle()
     assert ui.state("state.result.output.rows.find(r => r.rid === 'invoice:9').values['數量']") == 5
     # 執行紀錄：好奇時才展開
-    ui.field("金額").locator("button[aria-label='金額怎麼來的']").click()
+    ui.field("金額").locator("button.why:has-text('怎麼來的')").click()
     ui.settle()
     assert "儲存格原本是" in ui.field("金額").locator(".trace").inner_text()
     page.click("#drawer summary:has-text('這一列的處理過程')")
@@ -224,9 +224,9 @@ def test_match_cards_expand_one_by_one(ui):
     assert first.locator(".match-foot button").inner_text() == "收起欄位"
     first.locator(".match-foot button").click()
     assert fields(cards.nth(0)) == before_first
-    page.click("button:has-text('全部展開')")
+    page.click("[role=switch]:has-text('顯示全部欄位')")
     assert fields(cards.nth(1)) > before_second and cards.nth(0).locator(".match-foot").count() == 0
-    page.click("button:has-text('全部收起')")
+    page.click("[role=switch]:has-text('顯示全部欄位')")
     assert fields(cards.nth(1)) == before_second
     ui.shot("match-expand")
 

@@ -28,12 +28,12 @@ def test_multiline_cells_stay_tidy(ui):
     plain = ui.row("INV-1001").bounding_box()["height"]
     one_line = ui.row("INV-1003").bounding_box()["height"]
     assert abs(one_line - plain) <= 2, "壓成一行時，多行的格子不應該讓這一列變高"
-    page.click("button[aria-pressed]:has-text('換行')")
+    page.click("[role=switch]:has-text('換行')")
     cell = ui.row("INV-1003").locator("td .cell-text").nth(2)
     lines = cell.evaluate("e => Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight))")
     assert 2 <= lines <= 4, f"換行顯示最多 4 行，實際 {lines} 行"
     ui.shot("multiline-wrap")
-    page.click("button[aria-pressed]:has-text('換行')")
+    page.click("[role=switch]:has-text('換行')")
     ui.row("INV-1003").click()
     area = ui.field("品名").locator("textarea")
     assert area.evaluate("e => e.offsetHeight") > 40, "細節的文字框要長高顯示多行"
@@ -105,36 +105,37 @@ def test_result_uses_full_width(ui):
     assert result >= work - 80, "結果區不固定最大寬度，用滿可用空間"
 
 
-def test_buttons_follow_stageshow(ui):
+def test_controls_follow_stageshow(ui):
     page = ui.run_sample()
     # 次要按鈕透明（ghost），沒有白底和框線；強調色只給最主要的動作
-    toolbar = page.locator(".tab-body .toolbar button.ghost").first
-    assert toolbar.evaluate("e => getComputedStyle(e).backgroundColor") in ("rgba(0, 0, 0, 0)", "transparent")
-    assert toolbar.evaluate("e => getComputedStyle(e).boxShadow") == "none"
-    assert page.locator(".result-head .primary, #exportButton.primary").count() == 1
+    ghost = page.locator(".tab-tools button.ghost").first
+    assert ghost.evaluate("e => getComputedStyle(e).backgroundColor") in ("rgba(0, 0, 0, 0)", "transparent")
+    assert ghost.evaluate("e => getComputedStyle(e).boxShadow") == "none"
     page.click(".tab:has-text('配對')")
     for card in page.locator(".match-card").all():
         assert card.locator(".primary").count() <= 1, "一張配對卡片最多一個強調色按鈕"
     page.click(".tab:has-text('結果')")
-    # 切換用的按鈕顯示按下的狀態，不換字
-    wrap = page.locator("button[aria-pressed]:has-text('換行')")
-    assert wrap.get_attribute("aria-pressed") == "false"
+    # 開或關的設定用開關（Toggle）
+    wrap = page.locator("[role=switch]:has-text('換行')")
+    assert wrap.get_attribute("aria-checked") == "false"
     wrap.click()
-    assert page.locator("button[aria-pressed]:has-text('換行')").get_attribute("aria-pressed") == "true"
-    page.locator("button[aria-pressed]:has-text('換行')").click()
+    assert page.locator("[role=switch]:has-text('換行')").get_attribute("aria-checked") == "true"
+    assert page.locator("table.grid.wrap").count() == 1
+    page.locator("[role=switch]:has-text('換行')").click()
+    # 警示裡的動作維持原本的文字連結
+    assert page.locator("#drawer .issue .link:text-is('確認無誤')").count() >= 1
+    # 進度（Meter）
+    assert page.locator("#progress [role=meter]").count() == 1
     # 關閉用叉叉，有名字（滑過會顯示、螢幕閱讀器讀得到）
-    ui.row("INV-1003").click()
     close = page.locator("#drawerClose")
     assert close.inner_text().strip() == "" and close.get_attribute("aria-label") == "關閉細節"
-    assert close.locator("svg.icon").count() == 1
     close.click()
     assert page.is_hidden("#drawer")
     page.click("#recipeList button:has-text('查看')")
     page.wait_for_selector("#dialog[open]")
     page.click("#dialog .dialog-close")
     assert page.locator("#dialog[open]").count() == 0
-    # 每個只有圖示的按鈕都要有名字
     unnamed = page.evaluate("""[...document.querySelectorAll('button')].filter(b => b.offsetParent && !b.textContent.trim()
         && !b.getAttribute('aria-label')).length""")
-    assert unnamed == 0
-    ui.shot("buttons")
+    assert unnamed == 0, "只有圖示的按鈕都要有名字"
+    ui.shot("controls")

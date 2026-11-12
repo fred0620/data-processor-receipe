@@ -45,9 +45,9 @@ def test_pop_out_moves_the_tab_and_keeps_windows_in_sync(ui):
     assert "匯率" not in w.locator("table.grid thead th").all_inner_texts()
     w.click(".menu-body label:has-text('匯率') input")
     w.click("summary:has-text('欄位')")
-    w.click("button[aria-pressed]:has-text('換行')")
+    w.click("[role=switch]:has-text('換行')")
     assert w.locator("table.grid.wrap").count() == 1
-    w.click("button[aria-pressed]:has-text('換行')")
+    w.click("[role=switch]:has-text('換行')")
 
     # 在 pop out 視窗修改 → 主視窗同步
     ui.row("INV-1006", page=w).click()
