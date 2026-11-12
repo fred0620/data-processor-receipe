@@ -9,9 +9,10 @@
 </head>
 <body>
 <header class="bar">
+  <button id="sideToggle" class="ghost small icon-btn side-toggle" type="button" aria-label="收起左欄" title="收起左欄" data-icon="panel"></button>
   <h1>資料處理器 <span id="version" class="version"></span></h1>
   <span id="runStatus" class="run-status" hidden></span>
-  <button id="popInButton" class="ghost small" type="button" hidden title="關閉這個視窗，回到主視窗">Pop in</button>
+  <button id="popInButton" class="ghost small" type="button" hidden title="關閉這個視窗，回到主視窗" data-icon="popin">Pop in</button>
   <a class="manual-link" href="/manual" target="_blank" rel="noopener">使用手冊</a>
 </header>
 
@@ -20,7 +21,7 @@
     <section class="panel">
       <div class="panel-head">
         <h2><span class="step">1</span>Recipe</h2>
-        <button id="newRecipe" class="ghost small" type="button">新增</button>
+        <button id="newRecipe" class="ghost small" type="button" data-icon="plus">新增</button>
       </div>
       <div id="recipeList" class="recipe-list"></div>
       <p class="muted small-text">Recipe 定義資料怎麼讀、怎麼配對、怎麼輸出。可以請 AI 依照規格寫好再放進來。</p>
@@ -52,8 +53,8 @@
           <p id="resultSub" class="muted"></p>
         </div>
         <div class="actions">
-          <button id="resetButton" class="ghost" type="button" title="清掉這個檔案的修改、指定的配對和確認，從頭再檢查一次">重新檢查</button>
-          <a id="exportButton" class="button primary" href="#">下載 Excel</a>
+          <button id="resetButton" class="ghost" type="button" title="清掉這個檔案的修改、指定的配對和確認，從頭再檢查一次" data-icon="reset">重新檢查</button>
+          <a id="exportButton" class="button primary" href="#" data-icon="download">下載 Excel</a>
         </div>
       </div>
       <ol id="pipeline" class="pipeline"></ol>
@@ -65,11 +66,10 @@
 
   <div id="sideSplit" class="splitter" role="separator" aria-orientation="vertical" tabindex="0" title="拖曳調整寬度，連按兩下恢復預設"></div>
   <div id="drawerSplit" class="splitter" role="separator" aria-orientation="vertical" tabindex="0" title="拖曳調整寬度，連按兩下恢復預設"></div>
-  <button id="sideToggle" class="ghost small side-toggle" type="button" title="收起左欄">‹</button>
   <aside id="drawer" class="drawer" hidden>
     <div class="drawer-head">
       <h3 id="drawerTitle"></h3>
-      <button id="drawerClose" class="ghost small" type="button">關閉</button>
+      <button id="drawerClose" class="ghost icon-btn" type="button" aria-label="關閉細節" title="關閉細節" data-icon="x"></button>
     </div>
     <div id="drawerBody" class="drawer-body"></div>
   </aside>
@@ -77,7 +77,10 @@
 
 <dialog id="dialog" class="dialog">
   <form method="dialog" class="dialog-inner">
-    <h3 id="dialogTitle"></h3>
+    <div class="dialog-head">
+      <h3 id="dialogTitle"></h3>
+      <button class="ghost icon-btn dialog-close" type="submit" value="cancel" formnovalidate aria-label="關閉" title="關閉" data-icon="x"></button>
+    </div>
     <div id="dialogBody"></div>
     <div class="dialog-actions" id="dialogActions"></div>
   </form>

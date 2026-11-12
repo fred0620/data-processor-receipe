@@ -32,6 +32,13 @@ STAGES = [
 log = logging.getLogger("dataprocessor")
 
 
+class _NoInput:
+    columns: dict = {}
+
+
+_NO_INPUT = _NoInput()
+
+
 @dataclass
 class Issue:
     level: str                       # error（無法執行）、review（需檢查）、notice（提示）
@@ -261,9 +268,18 @@ class _Run:
                      **({spec.sheet_column.name: "VARCHAR"} if spec.sheet_column else {}),
                      **{name: SQL_TYPES[c.type] for name, c in spec.columns.items()}}
             box.load(spec.name, types, rows)
+            # 每張工作表的表頭位置與欄位位置：介面用來回到原始 Excel 的那一列、那一格
+            positions = {}
+            for found in targets:
+                columns = {c: found.columns[c] for c in spec.columns if c in found.columns}
+                for c, col in spec.columns.items():
+                    if col.source is not None and col.source in found.columns:
+                        columns[c] = found.columns[col.source]
+                positions[found.sheet] = {"header_row": found.header_row, "columns": columns}
             self.inputs[spec.name] = {"sheet": "、".join(t.sheet for t in targets), "sheets": [t.sheet for t in targets],
-                                      "header_row": first.header_row, "rows": len(rows),
-                                      "headers": first.headers, "missing": first.missing, "excluded": 0}
+                                      "header_row": first.header_row, "rows": len(rows), "label": spec.label,
+                                      "headers": first.headers, "missing": first.missing, "excluded": 0,
+                                      "positions": positions}
         self.summary("load", f"{len(self.inputs)} 張表・{sum(i['rows'] for i in self.inputs.values())} 列")
         return pending
 
@@ -733,6 +749,10 @@ class _Run:
             record = {"rid": rid, "row": own.get("_row"), "sheet": own.get("_sheet"), "values": {}, "raw": {},
                       "edited": {}, "issues": [], "source": own.get("_rid"),
                       "links": {c: own[c] for c in rid_columns if c != "_rid" and own.get(c)}}
+            # 每個輸出欄位來自哪一張輸入表的哪一列、哪一欄（直接取自輸入表的欄位才有）
+            record["origins"] = {out: [own[key], src] for key, mapping in translations.items() if own.get(key)
+                                 for src, out in mapping.items()
+                                 if src in self.recipe.inputs.get(str(own[key]).split(":", 1)[0], _NO_INPUT).columns}
             cell_issues: list[Issue] = []
             for column, value in zip(spec.columns, row[len(extra):]):
                 record["values"][column.name] = self._output_value(column, value, record, rid, cell_issues)

@@ -89,7 +89,7 @@ button { cursor: pointer; }
 /* 收起時直接改欄寬：拖曳過的寬度寫在元素上，用變數蓋不過去 */
 .layout.side-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
 .layout.side-collapsed.with-drawer { grid-template-columns: 0 minmax(0, 1fr) var(--drawer-w); }
-.layout.side-collapsed .side-toggle { left: 8px; }
+
 .layout.side-collapsed .setup { visibility: hidden; border: 0; padding: 0; }
 .splitter {
   position: absolute; top: 0; bottom: 0; z-index: 5; width: 7px; margin-left: -3px; cursor: col-resize;
@@ -101,10 +101,8 @@ button { cursor: pointer; }
 .layout.with-drawer #drawerSplit { display: block; }
 .layout.side-collapsed #sideSplit { display: none; }
 body.resizing { cursor: col-resize; user-select: none; }
-.side-toggle {
-  position: absolute; top: 12px; z-index: 6; padding: 4px 8px; font-size: 12px; line-height: 1;
-  left: calc(var(--side-w) + 8px);
-}
+/* 收起左欄的按鈕放在最上方的列，在標題左邊，不會蓋到內容 */
+.side-toggle { margin: 0 -14px 0 -6px; }
 .setup {
   background: var(--surface); border-right: 1px solid var(--line); overflow-y: auto;
   padding: 16px 12px; display: flex; flex-direction: column; gap: 20px;
@@ -148,9 +146,29 @@ button:active:not(:disabled), .button:active { transform: scale(0.97); }
 button:disabled { opacity: .45; cursor: default; }
 .primary { background: var(--accent); color: #fff; box-shadow: none; }
 .primary:hover:not(:disabled), .button.primary:hover { background: color-mix(in srgb, var(--accent), #000 10%); }
-.ghost { background: var(--surface); }
-.small { min-height: 24px; padding: 0 9px; font-size: 12.5px; }
+/* Stageshow 的按鈕：default 白底細框；ghost 透明、滑過才有底色（次要動作的預設）；
+   tertiary 淡灰底；quiet 清單與卡片裡的小動作。強調色只留給最主要的動作（primary）。 */
+.ghost, .quiet, .tertiary { box-shadow: none; }
+.ghost, .quiet { background: transparent; }
+.ghost:hover:not(:disabled), .quiet:hover:not(:disabled), .button.ghost:hover { background: var(--ink-2); }
+.tertiary { background: var(--ink-2); }
+.tertiary:hover:not(:disabled) { background: var(--ink-3); }
+.ghost[aria-pressed="true"], .tertiary[aria-pressed="true"],
+.ghost[aria-pressed="true"]:hover:not(:disabled) { background: var(--ink-3); color: var(--text-strong); }
+.ghost[aria-pressed="false"] { color: var(--text); }
+.small { min-height: 24px; padding: 0 8px; gap: 5px; font-size: 12.5px; }
+.quiet { min-height: 24px; padding: 0 6px; gap: 4px; font-size: 12.5px; color: var(--text-strong); }
+.quiet.danger, .ghost.danger { color: var(--danger-text); }
+.quiet.danger:hover:not(:disabled) { background: var(--danger-soft); }
+button .icon, .button .icon { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5;
+  stroke-linecap: round; stroke-linejoin: round; color: var(--icon); }
+.primary .icon, .danger .icon, [aria-pressed="true"] .icon { color: inherit; }
+.small .icon, .quiet .icon { width: 13px; height: 13px; }
+.icon-btn { width: var(--button); padding: 0; }
+.icon-btn.small { width: 24px; }
+.icon-btn .icon { width: 16px; height: 16px; }
 .block { width: 100%; min-height: 32px; border-radius: var(--radius-md); font-size: 14px; }
+/* 文字裡的連結（說明段落中的「複製規格給 AI」、使用範例）才用強調色 */
 .link {
   min-height: 0; padding: 0; background: none; box-shadow: none; color: var(--accent-text);
   font-size: 12.5px; font-weight: 500;
@@ -229,7 +247,7 @@ button:disabled { opacity: .45; cursor: default; }
 .dot.confirmed { background: var(--accent); }
 
 /* ---------- 分頁 ---------- */
-.tabs { display: flex; gap: 22px; margin: 24px 0 16px; border-bottom: 1px solid var(--ink-3); }
+.tabs { display: flex; flex-wrap: wrap; column-gap: 22px; row-gap: 6px; margin: 24px 0 16px; border-bottom: 1px solid var(--ink-3); }
 .tab {
   position: relative; min-height: 0; padding: 0 0 9px; background: none; box-shadow: none; border-radius: 0;
   color: var(--text); font-size: 13px; font-weight: 500; transition: color .2s ease;
@@ -356,9 +374,11 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .field .hint { grid-column: 2; font-size: 12px; color: var(--text); min-height: 0; }
 .field-label { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
 .field-label label { max-width: 100%; }
-.field .why { color: var(--text-faint); font-weight: 400; font-size: 11.5px; opacity: 0; transition: opacity 160ms ease; }
+.field-tools { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; margin: 2px 0 0 -6px; }
+.field .why.icon-btn { width: 22px; }
+.field .why { min-height: 20px; color: var(--text); font-weight: 400; font-size: 11.5px; opacity: 0; transition: opacity 160ms ease; }
 .field:hover .why, .field:focus-within .why, .field .why.open { opacity: 1; }
-.field .why:hover:not(:disabled) { color: var(--accent-text); }
+.field .why.cell-link { font-family: var(--mono); }
 .trace { grid-column: 2; margin: 2px 0 6px; padding: 8px 10px 8px 26px; border-radius: var(--radius-md); background: var(--canvas);
   font-size: 12.5px; line-height: 1.6; color: var(--text-strong); }
 .trace li { padding-left: 2px; }
@@ -451,6 +471,8 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
 .dialog::backdrop { background: rgba(0, 0, 0, .25); }
 .dialog-inner { padding: 20px; display: flex; flex-direction: column; gap: 12px; }
 .dialog h3 { font-size: 15px; font-weight: 600; }
+.dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dialog-close { margin: -4px -6px 0 0; }
 .dialog p { margin: 0; font-size: 13px; }
 .dialog textarea {
   width: 100%; min-height: 320px; padding: 10px 12px; background: var(--surface); border: 0;
@@ -504,3 +526,34 @@ button.confirming, button.confirming:hover:not(:disabled) { background: var(--da
   .layout.with-drawer { grid-template-columns: 248px minmax(0, 1fr) 320px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+
+/* ---------- 原始資料 ---------- */
+.source-grid { font-size: 12.5px; }
+.source-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--well); color: var(--text); font-weight: 500;
+  font-family: var(--mono); font-size: 11.5px; text-align: center; min-width: 72px; }
+.source-grid thead th.corner { min-width: 44px; left: 0; z-index: 3; }
+.source-grid thead th.target-col { color: var(--accent-text); background: var(--accent-soft); }
+.source-grid tbody th.rowno { position: sticky; left: 0; z-index: 1; background: var(--well); text-align: right;
+  font-weight: 400; padding-right: 10px; }
+.source-grid td { max-width: 280px; }
+.source-grid:not(.wrap) td .cell-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.source-grid tr.src-header td { font-weight: 600; color: var(--text-strong); background: var(--ink-1); }
+.source-grid tr.src-header th.rowno { color: var(--text-strong); }
+.source-grid tr.src-target td { background: var(--accent-soft); }
+/* 固定在左邊的列號要用不透明的底色，捲動時後面的內容才不會透出來 */
+.source-grid tr.src-target th.rowno { background: color-mix(in srgb, var(--accent) 14%, var(--well)); color: var(--accent-text); }
+.source-grid tr.src-header th.rowno { background: color-mix(in srgb, #000 4%, var(--well)); }
+.source-grid td.src-cell { box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent-soft), #fff 40%); }
+.source-wrap { max-height: calc(100vh - 260px); overflow: auto; }
+.source-legend { margin: 0 0 10px; }
+.toolbar .jump { width: 120px; }
+.source-list { display: flex; flex-direction: column; gap: 4px; }
+.source-item { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 12.5px; }
+.source-item .source-label { color: var(--text-strong); font-weight: 500; }
+.source-item .spacer { flex: 1; }
+.row-source { margin-left: 4px; min-height: 20px; }
+.row-source.icon-btn { width: 22px; }
+.chip-close { min-height: 18px; margin: -2px -4px -2px 4px; }
+.chip-close.icon-btn { width: 18px; }
+.stage-go { margin-left: 6px; }

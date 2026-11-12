@@ -8,7 +8,7 @@ from __future__ import annotations
 
 def _pop_out(ui, page):
     with ui.context.expect_page() as info:
-        page.click(".tab-tools button:has-text('Pop out ↗')")
+        page.click(".tab-tools button:has-text('Pop out')")
     win = ui.watch(info.value, "pop")
     win.set_viewport_size({"width": 1600, "height": 950})
     win.wait_for_selector("#result:not([hidden]) .tab-body *")
@@ -25,7 +25,7 @@ def test_pop_out_moves_the_tab_and_keeps_windows_in_sync(ui):
     assert main.locator(".tab.away:has-text('結果') .away-mark").count() == 1
     main.click(".tab:has-text('結果')")
     assert main.is_visible(".popped-note:has-text('在 pop out 視窗')") and main.locator("table.grid").count() == 0
-    assert not main.is_visible(".tab-tools button:has-text('Pop out ↗')")   # 已經搬出去的分頁不能再搬一次
+    assert not main.is_visible(".tab-tools button:has-text('Pop out')")   # 已經搬出去的分頁不能再搬一次
 
     # pop out 視窗：只有結果這個分頁，沒有左欄和流程卡片，表格用滿寬度
     assert w.locator(".tab").all_inner_texts()[0].startswith("結果") and w.locator(".tab").count() == 1
@@ -45,9 +45,9 @@ def test_pop_out_moves_the_tab_and_keeps_windows_in_sync(ui):
     assert "匯率" not in w.locator("table.grid thead th").all_inner_texts()
     w.click(".menu-body label:has-text('匯率') input")
     w.click("summary:has-text('欄位')")
-    w.click("button:has-text('顯示換行')")
+    w.click("button[aria-pressed]:has-text('換行')")
     assert w.locator("table.grid.wrap").count() == 1
-    w.click("button:has-text('壓成一行')")
+    w.click("button[aria-pressed]:has-text('換行')")
 
     # 在 pop out 視窗修改 → 主視窗同步
     ui.row("INV-1006", page=w).click()

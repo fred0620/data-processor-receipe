@@ -481,6 +481,32 @@ def rerun(run_id):
     return jsonify(_execute(run_id))
 
 
+SHEET_PAGE = 200
+
+
+@app.get("/api/runs/<run_id>/sheet")
+def run_sheet(run_id):
+    """原始 Excel：回傳一張工作表的一段（每次最多 200 列），讓人回去核對原本的資料。"""
+    record = _run_record(run_id)
+    workbook = _workbooks.get(record["workbook"])
+    if not workbook:
+        raise Missing("這份 Excel 已經關閉，請重新上傳")
+    sheets = workbook["sheets"]
+    name = request.args.get("name") or sheets[0].name
+    sheet = next((s for s in sheets if s.name == name), None)
+    if sheet is None:
+        raise Missing("找不到這張工作表")
+    try:
+        start = max(1, int(request.args.get("start", "1")))
+    except ValueError as error:
+        raise ValueError("列號要是數字") from error
+    rows = sheet.rows[start - 1:start - 1 + SHEET_PAGE]
+    width = max((len(r) for r in sheet.rows), default=0)
+    return jsonify({"names": [s.name for s in sheets], "name": sheet.name, "total": len(sheet.rows),
+                    "start": start, "width": width, "page": SHEET_PAGE,
+                    "rows": [[("" if v is None else v) for v in row] + [""] * (width - len(row)) for row in rows]})
+
+
 @app.post("/api/runs/<run_id>/reset")
 def reset_review(run_id):
     """清掉這個檔案的人工決定（修改、指定的配對、確認），從頭再檢查。會先留一份可以復原。"""

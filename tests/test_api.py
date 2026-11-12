@@ -151,3 +151,23 @@ def test_reset_clears_decisions_and_can_be_restored(client):
     assert restored["decisions"] == 2 and not restored["can_restore"]
     assert next(r for r in restored["output"]["rows"] if r["rid"] == "invoice:9")["values"]["金額"] == 300
     assert client.post(f"/api/runs/{again['run_id']}/restore", headers=LOCAL).status_code == 404
+
+
+def test_original_sheet_and_cell_origins(client):
+    result = _run(client)
+    run_id = result["run_id"]
+    inputs = result["inputs"]["invoice"]
+    position = inputs["positions"][inputs["sheets"][0]]
+    row = next(r for r in result["output"]["rows"] if r["rid"] == "invoice:6")
+    source_rid, column = row["origins"]["金額"]                     # 金額來自發票的哪一列、哪一欄
+    assert source_rid == "invoice:6" and column in position["columns"]
+    page = client.get(f"/api/runs/{run_id}/sheet", query_string={"name": inputs["sheets"][0], "start": 1},
+                      headers=LOCAL).json
+    header = page["rows"][position["header_row"] - 1]
+    assert header[position["columns"][column]] == "金額" and position["header_row"] == 3
+    cell = page["rows"][6 - 1][position["columns"][column]]
+    assert cell == "2,000"                                            # 原始 Excel 第 6 列的金額格，原本的寫法
+    assert page["rows"][5][0] == "INV-1003" and page["width"] == 8
+    linked = row["origins"].get("報單號碼")
+    assert linked and linked[0].startswith("declaration:")             # 從報關單帶進來的欄位指回報關單
+    assert client.get(f"/api/runs/{run_id}/sheet", query_string={"name": "沒有這張"}, headers=LOCAL).status_code == 404

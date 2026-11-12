@@ -49,12 +49,12 @@ function resetButton(result) {
   button.classList.remove("confirming");
   button.hidden = result.status === "error";
   button.disabled = !result.decisions;
-  button.textContent = "重新檢查";
+  button.replaceChildren(icon("reset"), el("span", { text: "重新檢查" }));
   button.title = result.decisions ? "清掉這個檔案的修改、指定的配對和確認，從頭再檢查一次" : "還沒有人工修改、指定或確認";
   button.onclick = async () => {
     if (!button.classList.contains("confirming")) {
       button.classList.add("confirming");
-      button.textContent = `清掉 ${result.decisions} 項人工決定？再按一次`;
+      button.replaceChildren(icon("reset"), el("span", { text: `清掉 ${result.decisions} 項人工決定？再按一次` }));
       resetButton.timer = setTimeout(() => resetButton(state.result), 4000);
       return;
     }
@@ -91,6 +91,55 @@ function showError(error, title = "無法完成") {
 }
 
 /* ---------- 對話框 ---------- */
+/* ---------- 圖示 ---------- */
+/* Stageshow 的圖示規則：一套線條、同樣粗細（1.5）、用文字顏色。這裡自己畫，不從網路下載圖示套件。 */
+const ICONS = {
+  x: "M4 4l8 8M12 4l-8 8",
+  external: "M5.5 10.5l5-5M6.75 5.5h3.75v3.75M3.25 4.75v8h8",
+  popin: "M10.5 5.5l-5 5M9.25 10.5H5.5V6.75M4.75 3.25h8v8",
+  download: "M8 2.75v7.5M5 7.5l3 3 3-3M3 13h10",
+  reset: "M2.75 8a5.25 5.25 0 1 0 1.55-3.72M2.75 2.75v2.5h2.5",
+  undo: "M5.75 4.25L3.25 6.75l2.5 2.5M3.25 6.75h6.5a3 3 0 0 1 0 6H7.5",
+  check: "M3.5 8.5l3 3 6-7",
+  left: "M10 3.5L5.5 8l4.5 4.5",
+  right: "M6 3.5L10.5 8 6 12.5",
+  arrow: "M3 8h10M9 4l4 4-4 4",
+  columns: "M2.75 3.25h10.5v9.5H2.75zM6.25 3.25v9.5M9.75 3.25v9.5",
+  wrap: "M2.75 4h10.5M2.75 8h8.25a2 2 0 0 1 0 4H8.75M10.25 10.5l-1.5 1.5 1.5 1.5M2.75 12h3.5",
+  dense: "M2.75 3.5h10.5M2.75 6.5h10.5M2.75 9.5h10.5M2.75 12.5h10.5",
+  sheet: "M2.75 2.75h10.5v10.5H2.75zM2.75 6.25h10.5M2.75 9.75h10.5M6.25 2.75v10.5",
+  eye: "M1.75 8s2.25-4.5 6.25-4.5S14.25 8 14.25 8 12 12.5 8 12.5 1.75 8 1.75 8zM8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+  trash: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.5 8.5h6l.5-8.5",
+  plus: "M8 3v10M3 8h10",
+  help: "M8 14.25a6.25 6.25 0 1 0 0-12.5 6.25 6.25 0 0 0 0 12.5zM6.25 6.25a1.75 1.75 0 1 1 2.4 1.62c-.42.18-.65.57-.65 1.03v.35M8 11.25v.01",
+  panel: "M2.75 2.75h10.5v10.5H2.75zM6.25 2.75v10.5",
+  copy: "M5.5 5.5h7v7h-7zM3.5 10.5v-7h7",
+  edit: "M10.5 2.75l2.75 2.75L6 12.75H3.25V10z",
+};
+
+function icon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("icon");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", ICONS[name]);
+  svg.append(path);
+  return svg;
+}
+
+/* 按鈕依 Stageshow：primary（強調色，一個區塊只留給最主要的動作）、default（白底細框）、
+   ghost（透明，滑過才有底色，次要動作的預設）、quiet（文字按鈕，給清單、卡片裡的小動作）。
+   只有圖示的按鈕一定要有 label：滑過會顯示，螢幕閱讀器也讀得到。 */
+function btn({ text = "", icon: name = null, variant = "ghost", size = "small", label = null, pressed, danger = false, extra = "", ...rest }) {
+  const classes = [variant === "default" ? "" : variant, size === "small" ? "small" : "", text ? "" : "icon-btn", danger ? "danger" : "", extra];
+  return el("button", {
+    type: "button", class: classes.filter(Boolean).join(" ") || null,
+    "aria-label": label, title: rest.title || label,
+    "aria-pressed": pressed === undefined ? null : String(Boolean(pressed)), ...rest,
+  }, name ? icon(name) : null, text ? el("span", { text }) : null);
+}
+
 function openDialog(title, body, actions) {
   $("dialogTitle").textContent = title;
   put($("dialogBody"), body);
@@ -113,7 +162,7 @@ function showProblems(title, problems) {
     el("p", { class: "muted", text: "可以把下面的問題整段複製給 AI，請它修正 recipe。" }),
     el("ul", { class: "problems" }, problems.map((p) => el("li", { text: p }))),
   ], [
-    el("button", { type: "button", class: "ghost", text: "複製給 AI", onclick: () => copyText(problemsText(problems)) }),
+    btn({ text: "複製給 AI", icon: "copy", variant: "default", size: "normal", onclick: () => copyText(problemsText(problems)) }),
     el("button", { type: "button", class: "primary", text: "關閉", onclick: closeDialog }),
   ]);
 }
@@ -190,8 +239,9 @@ function setupPanes() {
   }
   const collapse = (on) => {
     layout.classList.toggle("side-collapsed", on);
-    $("sideToggle").textContent = on ? "›" : "‹";
     $("sideToggle").title = on ? "展開左欄" : "收起左欄";
+    $("sideToggle").setAttribute("aria-label", $("sideToggle").title);
+    $("sideToggle").setAttribute("aria-pressed", String(on));
     prefs.set("sideCollapsed", on);
   };
   collapse(prefs.get("sideCollapsed", false));
@@ -226,9 +276,9 @@ function renderRecipes() {
       r.description ? el("div", { class: "desc", text: r.description }) : null,
       r.problems.length ? el("div", { class: "bad", text: `有 ${r.problems.length} 個問題，無法使用` }) : null),
       r.id === state.recipeId ? el("div", { class: "recipe-tools" },
-        el("button", { type: "button", class: "link", text: "查看", onclick: () => viewRecipe(r) }),
-        r.problems.length ? el("button", { type: "button", class: "link", text: "問題清單", onclick: () => showProblems(`${r.name} 的問題`, r.problems) }) : null,
-        el("button", { type: "button", class: "link danger", text: "刪除", onclick: () => deleteRecipe(r) })) : null)));
+        btn({ text: "查看", icon: "eye", variant: "quiet", onclick: () => viewRecipe(r) }),
+        r.problems.length ? btn({ text: "問題清單", variant: "quiet", onclick: () => showProblems(`${r.name} 的問題`, r.problems) }) : null,
+        btn({ text: "刪除", icon: "trash", variant: "quiet", danger: true, onclick: () => deleteRecipe(r) })) : null)));
   }
   updateRunButton();
 }
@@ -268,8 +318,8 @@ async function viewRecipe(recipe) {
     };
     show(info ? "explain" : "yaml");
     openDialog(recipe.name, body, [
-      el("button", { type: "button", class: "ghost", text: "複製 YAML", onclick: () => copyText(data.text) }),
-      el("button", { type: "button", class: "ghost", text: "修改", onclick: () => editRecipe(data.text) }),
+      btn({ text: "複製 YAML", icon: "copy", variant: "default", size: "normal", onclick: () => copyText(data.text) }),
+      btn({ text: "修改", icon: "edit", variant: "default", size: "normal", onclick: () => editRecipe(data.text) }),
       el("button", { type: "button", class: "primary", text: "關閉", onclick: closeDialog }),
     ]);
   } catch (error) { showError(error); }
@@ -296,7 +346,7 @@ function editRecipe(text = "") {
   const showProblems = (error) => {
     if (!error.problems.length) { toast(error.message, true); return; }
     put(problems, el("ul", { class: "problems" }, error.problems.map((p) => el("li", { text: p }))),
-      el("button", { type: "button", class: "link", text: "複製問題給 AI", onclick: () => copyText(problemsText(error.problems)) }));
+      btn({ text: "複製問題給 AI", icon: "copy", variant: "quiet", onclick: () => copyText(problemsText(error.problems)) }));
   };
   const save = async () => {
     try {
@@ -317,18 +367,18 @@ function editRecipe(text = "") {
         el("p", { class: "muted", text: "下面是程式依 recipe 整理的說明，和實際執行的邏輯一致。確認每一步都符合你的規則再儲存；不對的地方回去請 AI 修改。" }),
         explainView(info),
       ], [
-        el("button", { type: "button", class: "ghost", text: "返回修改", onclick: editStep }),
+        btn({ text: "返回修改", icon: "left", variant: "default", size: "normal", onclick: editStep }),
         el("button", { type: "button", class: "primary", text: "確認並儲存", onclick: save }),
       ]);
     } catch (error) { showProblems(error); }
   };
   const editStep = () => openDialog("新增或更新 recipe", [
     el("p", { class: "muted" }, "先把規格複製給 AI，連同你的欄位與處理規則請它寫 recipe，再貼回這裡。下一步會把 recipe 翻成白話讓你確認。 ",
-      el("button", { type: "button", class: "link", text: "複製規格給 AI", onclick: copySpec })),
+      el("button", { type: "button", class: "link accent", text: "複製規格給 AI", onclick: copySpec })),
     area, problems,
   ], [
-    el("button", { type: "button", class: "ghost", text: "選擇檔案", onclick: () => file.click() }), file,
-    el("button", { type: "button", class: "ghost", text: "取消", onclick: closeDialog }),
+    btn({ text: "選擇檔案", variant: "default", size: "normal", onclick: () => file.click() }), file,
+    btn({ text: "取消", size: "normal", onclick: closeDialog }),
     el("button", { type: "button", class: "primary", text: "下一步：確認說明", onclick: review }),
   ]);
   editStep();
@@ -394,7 +444,7 @@ const isPopout = pageParams.has("run");
 const ownTab = isPopout ? (pageParams.get("tab") || "rows") : null;
 const channel = window.BroadcastChannel ? new BroadcastChannel("dataprocessor") : null;
 const popped = new Map();   // 主視窗：分頁 → pop out 視窗（重新整理後拿不到視窗，只知道分頁在外面）
-const TAB_NAMES = { rows: "結果", match: "配對", mapping: "對照表", excluded: "排除", issues: "所有警示" };
+const TAB_NAMES = { rows: "結果", match: "配對", mapping: "對照表", excluded: "排除", issues: "所有警示", source: "原始資料" };
 
 function popOut() {
   const tab = state.tab;
@@ -507,14 +557,14 @@ function renderPoppedNote() {
     el("p", { class: "muted", text: "在那個視窗做的修改，會同步到這裡的其他分頁。" }),
     el("div", { class: "actions-row" },
       known && known.win && !known.win.closed
-        ? el("button", { type: "button", class: "ghost small", text: "切到那個視窗", onclick: () => known.win.focus() }) : null,
-      el("button", { type: "button", class: "primary small", text: "Pop in", onclick: () => {
+        ? btn({ text: "切到那個視窗", icon: "external", variant: "default", onclick: () => known.win.focus() }) : null,
+        el("button", { type: "button", class: "primary small", onclick: () => {
         channel?.postMessage({ type: "popin-tab", tab: state.tab });
         if (known && known.win && !known.win.closed) known.win.close();
         popped.delete(state.tab);
         renderTabs();
-      } }))));
-}
+        } }, icon("popin"), el("span", { text: "Pop in" })))));
+        }
 
 /* 另一個視窗更新時，若這個視窗正在打字（細節的欄位、搜尋框），先不重畫，離開輸入框後再更新，打到一半的字不會不見 */
 function isTyping() {
@@ -587,7 +637,7 @@ function stageLinks(stage) {
   const issuesOf = (test) => activeIssues().filter(test);
   const items = [];
   const link = (text, extra, onclick) => el("li", {}, text, extra ? el("span", { class: "muted", text: extra }) : null,
-    onclick ? el("button", { type: "button", class: "link", style: "margin-left:10px", text: "查看", onclick }) : null);
+    onclick ? btn({ text: "查看", icon: "arrow", variant: "quiet", extra: "stage-go", onclick }) : null);
   if (stage.id === "load") {
     const notes = issuesOf((i) => i.stage === "load");
     if (notes.length) items.push(link(`讀取時的提醒 ${notes.length} 則`, null, go({ tab: "issues", issueFilter: "all", issueFocus: { stage: "load", label: "讀取時的提醒" } })));
@@ -634,7 +684,8 @@ function tabList(r = state.result) {
     r.mappings.length ? ["mapping", "對照表", pendingMaps] : null,
     r.excluded.length ? ["excluded", "排除", r.excluded.length, true] : null,
     ["issues", "所有警示", open],
-  ].filter(Boolean);
+    ["source", "原始資料", 0],
+    ].filter(Boolean);
 }
 
 function renderTabs() {
@@ -652,11 +703,11 @@ function renderTabs() {
   }, label, away(id) ? el("span", { class: "away-mark", text: "↗" }) : null,
   n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)),
   isPopout ? null : el("div", { class: "tab-tools" },
-    popped.size ? el("button", { type: "button", class: "ghost small", text: "全部 Pop in", onclick: popInAll }) : null,
-    away(state.tab) ? null : el("button", { type: "button", class: "ghost small", text: "Pop out ↗",
-      title: "把這個分頁搬到另一個視窗，可以拖到另一個螢幕看完整的表格。兩邊的修改會同步。", onclick: popOut })));
+    popped.size ? btn({ text: "全部 Pop in", icon: "popin", onclick: popInAll }) : null,
+    away(state.tab) ? null : btn({ text: "Pop out", icon: "external", onclick: popOut,
+      title: "把這個分頁搬到另一個視窗，可以拖到另一個螢幕看完整的表格。兩邊的修改會同步。" })));
   if (away(state.tab)) renderPoppedNote();
-  else ({ rows: renderRows, match: renderMatch, mapping: renderMapping, excluded: renderExcluded, issues: renderIssues })[state.tab]();
+  else ({ rows: renderRows, match: renderMatch, mapping: renderMapping, excluded: renderExcluded, issues: renderIssues, source: renderSource })[state.tab]();
   renderDrawer();
 }
 
@@ -716,7 +767,7 @@ function visibleColumns() {
 function columnMenu() {
   const recipeId = state.result.recipe.id;
   const hidden = new Set(prefs.get(`hidden:${recipeId}`, []));
-  const menu = el("details", { class: "menu" }, el("summary", { class: "button ghost small", text: `欄位${hidden.size ? `（隱藏 ${hidden.size}）` : ""}` }),
+  const menu = el("details", { class: "menu" }, el("summary", { class: "button ghost small" }, icon("columns"), el("span", { text: `欄位${hidden.size ? `（隱藏 ${hidden.size}）` : ""}` })),
     el("div", { class: "menu-body" },
       state.result.output.columns.map((c) => {
         const box = el("input", { type: "checkbox", checked: !hidden.has(c.name) });
@@ -727,7 +778,7 @@ function columnMenu() {
         });
         return el("label", {}, box, c.name);
       }),
-      hidden.size ? el("button", { type: "button", class: "link", text: "全部顯示", onclick: () => { prefs.set(`hidden:${recipeId}`, []); renderRows(); } }) : null));
+      hidden.size ? btn({ text: "全部顯示", variant: "quiet", onclick: () => { prefs.set(`hidden:${recipeId}`, []); renderRows(); } }) : null));
   return menu;
 }
 
@@ -773,9 +824,9 @@ function renderRows(keepMenu = false) {
       el("span", { class: "spacer" }),
       el("span", { class: "muted", text: `${rows.length} 列` }),
       menu,
-      el("button", { type: "button", class: "ghost small", text: wrap ? "壓成一行" : "顯示換行", title: "儲存格有多行時，要不要換行顯示",
+      btn({ text: "換行", icon: "wrap", pressed: wrap, title: "儲存格有多行時換行顯示（最多 4 行）；關閉時壓成一行",
         onclick: () => { prefs.set("wrap", !wrap); renderRows(); } }),
-      el("button", { type: "button", class: "ghost small", text: dense ? "寬鬆" : "緊湊", title: "切換表格密度",
+      btn({ text: "緊湊", icon: "dense", pressed: dense, title: "縮小列高，一次看更多列",
         onclick: () => { prefs.set("dense", !dense); renderRows(); } })),
     rows.length ? el("div", { class: "table-wrap" }, table)
       : el("div", { class: "note", text: state.filter === "review" ? "沒有需要檢查的列。" : "沒有符合的列。" }),
@@ -786,15 +837,13 @@ function renderRows(keepMenu = false) {
 function issueLine(issue, extra = null) {
   const actions = [];
   if (issue.ref && issue.rid && state.result.matches.some((m) => m.name === issue.ref)) {
-    actions.push(el("button", { type: "button", class: "link", text: "前往配對", onclick: () => focusMatch(issue.ref, issue.rid.split("|")[0]) }));
+    actions.push(btn({ text: "前往配對", icon: "arrow", variant: "quiet", onclick: () => focusMatch(issue.ref, issue.rid.split("|")[0]) }));
   }
-  if (issue.code === "unmapped" && !issue.resolved) actions.push(el("button", { type: "button", class: "link", text: "補對照", onclick: () => goTo({ tab: "mapping" }) }));
+  if (issue.code === "unmapped" && !issue.resolved) actions.push(btn({ text: "補對照", icon: "arrow", variant: "quiet", onclick: () => goTo({ tab: "mapping" }) }));
   if (extra) actions.push(extra);
   if (issue.level !== "error" && !issue.resolved) {   // 修改、補對照、配對要到原本的地方還原
-    actions.push(el("button", {
-      type: "button", class: "link", text: issue.dismissed ? "取消確認" : "確認無誤",
-      onclick: () => act("dismiss", { keys: [issue.key], on: !issue.dismissed }),
-    }));
+    actions.push(btn({ text: issue.dismissed ? "取消確認" : "確認無誤", icon: issue.dismissed ? "undo" : "check", variant: "quiet",
+      onclick: () => act("dismiss", { keys: [issue.key], on: !issue.dismissed }) }));
   }
   return el("div", { class: `issue ${issue.dismissed ? "dismissed" : issue.level}` },
     el("span", { class: `dot ${issue.level}` }),
@@ -805,7 +854,8 @@ function issueLine(issue, extra = null) {
 
 function renderDrawer() {
   const r = state.result;
-  const row = r && state.tab === "rows" && r.output.rows.find((x) => x.rid === state.selected);
+  /* 看原始資料時細節也留著，可以左右對照 */
+  const row = r && (state.tab === "rows" || state.tab === "source") && r.output.rows.find((x) => x.rid === state.selected);
   $("drawer").hidden = !row;
   document.querySelector(".layout").classList.toggle("with-drawer", Boolean(row));
   if (!row) return;
@@ -835,14 +885,15 @@ function renderDrawer() {
     const traceKey = `${row.rid}\u0000${c.name}`;
     const open = state.openTrace.has(traceKey);
     const hint = c.name in row.edited ? el("div", { class: "hint" }, `原值：${row.edited[c.name] ?? "（空白）"}　`,
-      el("button", { type: "button", class: "link", text: "還原", onclick: () => act("edit", { rid: row.rid, column: c.name, revert: true }) })) : null;
-    const why = el("button", {
-      type: "button", class: `link why${open ? " open" : ""}`, text: open ? "收起" : "怎麼來的",
-      onclick: () => { open ? state.openTrace.delete(traceKey) : state.openTrace.add(traceKey); renderDrawer(); },
-    });
+      btn({ text: "還原", icon: "undo", variant: "quiet", onclick: () => act("edit", { rid: row.rid, column: c.name, revert: true }) })) : null;
+      const why = btn({ text: open ? "收起" : "", icon: "help", variant: "quiet", label: open ? null : `${c.name}怎麼來的`, extra: `why${open ? " open" : ""}`,
+        onclick: () => { open ? state.openTrace.delete(traceKey) : state.openTrace.add(traceKey); renderDrawer(); } });
+      const origin = cellPlace(row.origins && row.origins[c.name]);
+      const cellLink = origin ? btn({ text: origin.cell, icon: "sheet", variant: "quiet", extra: "why cell-link",
+        title: `看原始 Excel 的儲存格 ${origin.cell}（${origin.sheet}）`, onclick: () => openSource(origin) }) : null;
     const story = open ? traceList(row, (t) => t.columns[c.name]) : null;
     return el("div", { class: `field${flagged ? " flag-review" : ""}` },
-      el("div", { class: "field-label" }, el("label", { text: c.name, title: c.name }), why), input, hint, story);
+      el("div", { class: "field-label" }, el("label", { text: c.name, title: c.name }), el("span", { class: "field-tools" }, cellLink, why)), input, hint, story);
   });
   const rowKey = `${row.rid}\u0000*`;
   const rowStory = el("details", { class: "row-trace", open: state.openTrace.has(rowKey) },
@@ -857,10 +908,20 @@ function renderDrawer() {
       list.length ? el("section", {}, el("h4", { class: "section-title", text: title }), el("div", { class: "list" }, list.map((i) => issueLine(i)))) : null),
     el("section", {}, el("h4", { class: "section-title", text: "欄位" }), el("p", { class: "muted small-text", style: "margin:-4px 0 10px", text: "修改後按 Enter 儲存（Shift+Enter 換行），會保留原值。" }), fields),
     el("section", {}, rowStory),
-    el("section", {}, el("h4", { class: "section-title", text: "來源" }),
-      el("dl", { class: "kv" }, row.sheet ? [el("dt", { text: "工作表" }), el("dd", { text: row.sheet })] : null,
-        el("dt", { text: "Excel 列" }), el("dd", { text: row.row ?? "" }), el("dt", { text: "列代號" }), el("dd", { text: row.rid }))));
-}
+    sourceSection(row));
+    }
+
+    /* 這一列在原始 Excel 的哪裡：主要的輸入表，加上配對帶進來的其他表 */
+    function sourceSection(row) {
+      const places = [row.source, ...Object.values(row.links || {})].map(sourcePlace).filter(Boolean);
+      return el("section", {}, el("h4", { class: "section-title", text: "原始 Excel" }),
+        el("div", { class: "source-list" }, places.map((place) => el("div", { class: "source-item" },
+          el("span", { class: "source-label", text: place.label }),
+          el("span", { class: "muted", text: `${place.sheet}・第 ${place.row} 列` }),
+          el("span", { class: "spacer" }),
+          btn({ text: "看原始資料", icon: "sheet", variant: "quiet", onclick: () => openSource(place) })))),
+        el("p", { class: "muted small-text", text: `列代號 ${row.rid}` }));
+    }
 
 /* 執行紀錄：要看的時候才向程式要，同一次執行內記著不重複要 */
 function traceList(row, pick) {
@@ -914,7 +975,16 @@ function valuesList(values, columns, compare) {
 }
 
 /* 一列的辨識資訊：辨識欄位（例如發票號碼）加上 Excel 列號，讓人分得出是哪一筆 */
-function rowTitle(record, titleColumns) {
+function rowTitle(record, titleColumns, rid = null) {
+  const place = rid ? sourcePlace(rid) : null;
+  const link = place ? btn({ icon: "sheet", variant: "quiet", label: `看原始資料：${place.sheet} 第 ${place.row} 列`,
+    extra: "row-source", onclick: () => openSource(place) }) : null;
+  const title = rowTitleText(record, titleColumns);
+  if (link) title.append(link);
+  return title;
+}
+
+function rowTitleText(record, titleColumns) {
   const title = titleColumns.map((k) => record.values[k]).filter((v) => v !== null && v !== "").join("・");
   return el("span", { class: "row-title" }, title ? el("strong", { text: title }) : null,
     el("span", { class: "muted", text: `${title ? "　" : ""}第 ${record.row ?? "?"} 列` }));
@@ -955,9 +1025,9 @@ function renderMatch() {
         ["manual", `已確認 ${match.rows.filter((x) => ["manual", "none", "confirmed"].includes(x.status) || x.acknowledged).length}`]],
         state.matchFilter, (id) => { Object.assign(state, { matchFilter: id, matchFocus: null }); renderTabs(); }),
       searchBox(state.matchSearch, "搜尋", (v) => { state.matchSearch = v; renderMatch(); }, "match"),
-      state.matchFocus ? el("button", { type: "button", class: "ghost small", text: "顯示全部", onclick: () => { state.matchFocus = null; renderTabs(); } }) : null,
+      state.matchFocus ? btn({ text: "顯示全部", onclick: () => { state.matchFocus = null; renderTabs(); } }) : null,
       el("span", { class: "spacer" }),
-      el("button", { type: "button", class: "ghost small", text: state.matchAll ? "全部收起" : "全部展開",
+      el("button", { type: "button", class: "ghost small", "aria-pressed": String(state.matchAll), text: state.matchAll ? "全部收起" : "全部展開",
         title: "每張卡片也可以用卡片下方的連結各自展開",
         onclick: () => { state.matchAll = !state.matchAll; state.matchOpen.clear(); renderMatch(); } })),
     el("p", { class: "match-meta muted" }, `拿每一列${match.left_label}找對應的${match.right_label}（${match.mode_label}）。依序嘗試：${match.strategies.join(" → ")}`,
@@ -991,7 +1061,7 @@ function matchCard(match, row) {
   const togglePicker = () => { state.pickerFor = state.pickerFor === row.left ? null : row.left; renderMatch(); };
 
   const actions = [];
-  if (reviewIssue && row.status === "review") actions.push(el("button", { type: "button", class: "small primary", text: "確認正確", onclick: () => act("dismiss", { keys: [reviewIssue.key], on: true }) }));
+  if (reviewIssue && row.status === "review") actions.push(btn({ text: "確認正確", icon: "check", variant: "primary", onclick: () => act("dismiss", { keys: [reviewIssue.key], on: true }) }));
   if (reviewIssue && row.status === "confirmed") actions.push(el("button", { type: "button", class: "small ghost", text: "取消確認", onclick: () => act("dismiss", { keys: [reviewIssue.key], on: false }) }));
   if (row.status === "manual" || row.status === "none") actions.push(el("button", { type: "button", class: "small ghost", text: "交回自動", onclick: () => decide(null) }));
   actions.push(el("button", { type: "button", class: "small ghost", text: match.multi ? "加入" : row.rights.length ? "改選" : "手動指定", onclick: togglePicker }));
@@ -1007,22 +1077,22 @@ function matchCard(match, row) {
     side = el("div", { class: "candidates" }, candidates.map((target, i) => {
       const cand = row.candidates[i];
       return el("div", { class: "candidate" },
-        el("div", { class: "candidate-head" }, rowTitle(target, match.right_title),
+        el("div", { class: "candidate-head" }, rowTitle(target, match.right_title, cand.rid),
           cand.score !== null && cand.score !== undefined ? el("span", { class: "muted", text: `相似度 ${Number(cand.score).toFixed(2)}` }) : null,
           el("span", { class: "spacer" }),
-          el("button", { type: "button", class: "small primary", text: "選這筆", onclick: () => decide(match.multi ? [...row.rights, cand.rid] : [cand.rid]) })),
+          btn({ text: "選這筆", icon: "check", variant: "default", onclick: () => decide(match.multi ? [...row.rights, cand.rid] : [cand.rid]) })),
         valuesList(target.values, rightColumns, left.values));
     }));
   } else if (row.rights.length === 1 && !match.multi) {
     const target = match.right_rows[row.rights[0]];
-    side = el("div", {}, el("div", { class: "side-title" }, rowTitle(target, match.right_title)), valuesList(target.values, rightColumns, left.values));
+    side = el("div", {}, el("div", { class: "side-title" }, rowTitle(target, match.right_title, row.rights[0])), valuesList(target.values, rightColumns, left.values));
   } else if (row.rights.length) {
     side = el("div", { class: "picker-list" }, row.rights.map((rid) => {
       const target = match.right_rows[rid];
       return el("div", { class: "pick-row" },
         rowTitle(target, match.right_title),
         el("span", { class: "summary muted", title: oneLine(target.values, Object.keys(target.values)), text: oneLine(target.values, rightColumns) }),
-        el("button", { type: "button", class: "link danger", text: "移除", onclick: () => decide(row.rights.filter((x) => x !== rid)) }));
+        btn({ text: "移除", icon: "x", variant: "quiet", danger: true, onclick: () => decide(row.rights.filter((x) => x !== rid)) }));
     }));
   } else {
     side = el("p", { class: "muted", text: row.status === "none" ? "已確認沒有對應的資料" : "沒有找到對應的資料" });
@@ -1033,7 +1103,7 @@ function matchCard(match, row) {
       el("span", { class: "how", text: how }),
       el("span", { class: "spacer" }), actions),
     el("div", { class: "match-body" },
-      el("div", { class: "side" }, el("h4", { text: match.left_label }), el("div", { class: "side-title" }, rowTitle(left, match.left_title)),
+      el("div", { class: "side" }, el("h4", { text: match.left_label }), el("div", { class: "side-title" }, rowTitle(left, match.left_title, row.left)),
         valuesList(left.values, leftColumns)),
       el("div", { class: "side" }, el("h4", { text: match.right_label + (match.multi && row.rights.length ? `・${row.rights.length} 筆` : "") }), side,
         state.pickerFor === row.left ? picker(match, row, rightColumns, decide) : null)),
@@ -1046,7 +1116,7 @@ function expandToggle(match, row, left, sample, leftColumns, rightColumns, expan
   const hidden = total - leftColumns.length - rightColumns.length;
   if (state.matchAll || (!expanded && hidden <= 0)) return null;
   return el("footer", { class: "match-foot" }, el("button", {
-    type: "button", class: "link", text: expanded ? "收起欄位" : `顯示全部欄位（還有 ${hidden} 欄）`,
+    type: "button", class: "quiet small", text: expanded ? "收起欄位" : `顯示全部欄位（還有 ${hidden} 欄）`,
     onclick: () => { state.matchOpen[expanded ? "delete" : "add"](row.left); renderMatch(); },
   }));
 }
@@ -1118,7 +1188,7 @@ function renderMapping() {
       el("div", { class: "picker-list" }, mapping.added.map((entry) => el("div", { class: "pick-row" },
         el("span", { class: "summary" }, entry.raw, el("span", { class: "muted", text: "  →  " }), entry.target,
           mapping.custom_values.includes(entry.target) ? el("span", { class: "badge manual", style: "margin-left:8px", text: "自訂值" }) : null),
-        el("button", { type: "button", class: "link danger", text: "移除", onclick: () => act("mapping", { mapping: mapping.name, raw: entry.raw, target: null }) }))))));
+        btn({ text: "移除", icon: "x", variant: "quiet", danger: true, onclick: () => act("mapping", { mapping: mapping.name, raw: entry.raw, target: null }) }))))));
   }
   put($("tabBody"), sections);
 }
@@ -1129,8 +1199,123 @@ function renderExcluded() {
   const names = [...new Set(rows.flatMap((r) => Object.keys(r.values)))];
   put($("tabBody"), el("div", { class: "table-wrap" }, el("table", { class: `grid${prefs.get("dense", false) ? " dense" : ""}` },
     el("thead", {}, el("tr", {}, ["輸入表", "列", "原因", ...names].map((n) => el("th", { text: n })))),
-    el("tbody", {}, rows.map((r) => el("tr", {}, el("td", { text: r.input }), el("td", { class: "rowno", text: r.row }), el("td", { text: r.label }),
+    el("tbody", {}, rows.map((r) => el("tr", {}, el("td", { text: r.input }),
+      el("td", { class: "rowno" }, btn({ text: String(r.row), icon: "sheet", variant: "quiet", title: "看原始資料的這一列",
+        onclick: () => { const place = sourcePlace(r.rid); if (place) openSource(place); } })),
+      el("td", { text: r.label }),
       names.map((n) => el("td", { text: r.values[n] ?? "", title: r.values[n] ?? null }))))))));
+}
+
+/* ---------- 原始資料 ---------- */
+/* 回到上傳的 Excel 核對：照 Excel 的欄名（A、B、C）與列號顯示，標出表頭與要看的那一列、那一格。
+   找不到原因時可以回來看原本寫的是什麼。也可以 pop out 到另一個螢幕，和結果左右對照。 */
+function colLetter(index) {
+  let n = index + 1, text = "";
+  while (n > 0) { const m = (n - 1) % 26; text = String.fromCharCode(65 + m) + text; n = Math.floor((n - 1) / 26); }
+  return text;
+}
+
+/* 列代號（表:列 或 表:工作表:列）→ 原始 Excel 的位置 */
+function sourcePlace(rid) {
+  if (!rid || !state.result) return null;
+  const parts = String(rid).split("|")[0].split(":");
+  const input = state.result.inputs[parts[0]];
+  if (!input) return null;
+  const [sheet, row] = parts.length >= 3 ? [parts.slice(1, -1).join(":"), Number(parts[parts.length - 1])] : [input.sheets[0], Number(parts[1])];
+  if (!sheet || !row) return null;
+  return { table: parts[0], label: input.label || parts[0], sheet, row, col: null, cell: null };
+}
+
+/* 輸出欄位的來源 [列代號, 輸入欄位] → 原始 Excel 的那一格 */
+function cellPlace(origin) {
+  const place = origin ? sourcePlace(origin[0]) : null;
+  const col = place && state.result.inputs[place.table].positions?.[place.sheet]?.columns?.[origin[1]];
+  if (col === undefined || col === null) return null;
+  return { ...place, col, cell: `${colLetter(col)}${place.row}` };
+}
+
+function openSource(place) {
+  goTo({ tab: "source", source: { sheet: place.sheet, row: place.row, col: place.col, start: null } });
+}
+
+const sheetCache = new Map();
+
+async function renderSource() {
+  const r = state.result;
+  const firstInput = Object.values(r.inputs)[0];
+  const src = state.source = { sheet: firstInput?.sheets?.[0] || null, row: null, col: null, start: null, ...(state.source || {}) };
+  const start = src.start || Math.max(1, (src.row || 1) - 20);
+  const key = `${r.run_id}\u0000${src.sheet}\u0000${start}`;
+  let page = sheetCache.get(key);
+  if (!page) {
+    put($("tabBody"), el("div", { class: "note", text: "讀取原始資料…" }));
+    try {
+      page = await api(`/api/runs/${encodeURIComponent(r.run_id)}/sheet?name=${encodeURIComponent(src.sheet || "")}&start=${start}`);
+    } catch (error) { put($("tabBody"), el("div", { class: "note", text: error.message })); return; }
+    sheetCache.set(key, page);
+    if (state.tab !== "source" || state.result !== r) return;   // 讀取時已經換到別的分頁
+  }
+  src.sheet = page.name;
+  const headers = Object.values(r.inputs).flatMap((input) => {
+    const pos = input.positions?.[page.name];
+    return pos ? [{ row: pos.header_row, label: input.label }] : [];
+  });
+  const usedBy = (name) => Object.values(r.inputs).filter((input) => (input.sheets || []).includes(name)).map((input) => input.label);
+  const end = page.start + page.rows.length - 1;
+  const go = (changes) => { Object.assign(src, changes); renderSource(); };
+  const jump = el("input", { class: "search jump", type: "number", min: 1, max: page.total, placeholder: "跳到第幾列" });
+  jump.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && Number(jump.value) >= 1) go({ row: Number(jump.value), col: null, start: null });
+  });
+  const wrap = prefs.get("wrap", false);
+  const table = el("table", { class: `grid source-grid${wrap ? " wrap" : ""}` },
+    el("thead", {}, el("tr", {}, el("th", { class: "corner" }), Array.from({ length: page.width }, (_, i) => el("th", {
+      class: i === src.col ? "target-col" : null, text: colLetter(i) })))),
+    el("tbody", {}, page.rows.map((cells, offset) => {
+      const number = page.start + offset;
+      const header = headers.find((h) => h.row === number);
+      const target = number === src.row;
+      return el("tr", { class: [header ? "src-header" : "", target ? "src-target" : ""].filter(Boolean).join(" ") || null, dataset: { row: number } },
+        el("th", { class: "rowno", title: header ? `${header.label}的表頭` : null, text: number }),
+        cells.map((value, i) => el("td", { class: target && i === src.col ? "src-cell" : null, title: value || null },
+          el("div", { class: "cell-text", text: value }))));
+    })));
+  put($("tabBody"),
+    el("div", { class: "toolbar" },
+      chips(page.names.map((name) => [name, usedBy(name).length ? `${name}・${usedBy(name).join("、")}` : name]), page.name,
+        (name) => go({ sheet: name, row: null, col: null, start: 1 })),
+      el("span", { class: "spacer" }),
+      jump,
+      el("span", { class: "muted", text: page.total ? `第 ${page.start}–${end} 列，共 ${page.total} 列` : "空白的工作表" }),
+      btn({ icon: "left", label: "上一段", disabled: page.start <= 1, onclick: () => go({ start: Math.max(1, page.start - page.page) }) }),
+      btn({ icon: "right", label: "下一段", disabled: end >= page.total, onclick: () => go({ start: page.start + page.page }) })),
+    headers.length || src.row ? el("p", { class: "muted small-text source-legend" },
+      headers.map((h) => `第 ${h.row} 列是「${h.label}」的表頭`).join("，"),
+      src.row ? `${headers.length ? "；" : ""}標示的是第 ${src.row} 列${src.col !== null && src.col !== undefined ? `的 ${colLetter(src.col)}${src.row}` : ""}` : "") : null,
+    page.rows.length ? el("div", { class: "table-wrap source-wrap" }, table) : el("div", { class: "note", text: "這張工作表沒有資料。" }));
+  const focus = $("tabBody").querySelector(".src-cell") || $("tabBody").querySelector(".src-target");
+  if (focus) requestAnimationFrame(() => scrollToCell(focus));
+}
+
+/* 捲到要看的那一列（置中）與那一格。左右捲動時對齊到欄的開頭，左邊的欄位不會被切一半 */
+function scrollToCell(cell) {
+  const wrap = cell.closest(".source-wrap");
+  if (!wrap) return;
+  /* 用畫面上的實際位置計算：表頭與列號固定在邊上（sticky），offsetLeft 不可靠 */
+  const box = wrap.getBoundingClientRect();
+  const at = (node) => node.getBoundingClientRect().left - box.left + wrap.scrollLeft;   // 在表格裡的水平位置
+  const rect = cell.getBoundingClientRect();
+  wrap.scrollTop = Math.max(0, rect.top - box.top + wrap.scrollTop - wrap.clientHeight / 2 + rect.height / 2);
+  const heads = [...wrap.querySelectorAll("thead th")];
+  const rowno = heads[0].getBoundingClientRect().width;
+  const right = at(cell) + rect.width;
+  let left = 0;
+  if (cell.tagName === "TD" && right > wrap.clientWidth) {
+    const fit = heads.slice(1).find((th) => right - (at(th) - rowno) <= wrap.clientWidth);
+    left = at(fit || cell) - rowno;
+  }
+  wrap.scrollLeft = left;
+  wrap.scrollIntoView({ block: "nearest" });
 }
 
 /* ---------- 所有警示 ---------- */
@@ -1150,10 +1335,9 @@ function renderIssues() {
       chips([["review", "需檢查"], ["notice", "提示"], ["dismissed", "已處理"], ["all", "全部"]], state.issueFilter,
         (id) => { state.issueFilter = id; state.checked.clear(); renderTabs(); }),
       focus ? el("span", { class: "badge manual" }, `只看：${focus.label}`,
-        el("button", { type: "button", class: "link", style: "margin-left:6px", text: "✕", title: "顯示全部",
-          onclick: () => { state.issueFocus = null; renderTabs(); } })) : null,
+        btn({ icon: "x", variant: "quiet", label: "顯示全部", extra: "chip-close", onclick: () => { state.issueFocus = null; renderTabs(); } })) : null,
       el("span", { class: "spacer" }),
-      selectable.length ? el("button", { type: "button", class: "ghost small", text: "全選", onclick: () => { selectable.forEach((i) => state.checked.add(i.key)); renderTabs(); } }) : null,
+      selectable.length ? btn({ text: "全選", onclick: () => { selectable.forEach((i) => state.checked.add(i.key)); renderTabs(); } }) : null,
       state.checked.size ? el("button", {
         type: "button", class: "small primary", text: `${state.issueFilter === "dismissed" ? "取消確認" : "確認無誤"}（${state.checked.size}）`,
         onclick: async () => { const keys = [...state.checked]; state.checked.clear(); await act("dismiss", { keys, on: state.issueFilter !== "dismissed" }); },
@@ -1162,8 +1346,8 @@ function renderIssues() {
       const row = rowOf.get(issue.id);
       const box = el("input", { type: "checkbox", checked: state.checked.has(issue.key), disabled: issue.level === "error" || Boolean(issue.resolved) });
       box.addEventListener("change", () => { box.checked ? state.checked.add(issue.key) : state.checked.delete(issue.key); renderTabs(); });
-      return el("div", { class: "issue-row" }, box, issueLine(issue, row ? el("button", {
-        type: "button", class: "link", text: `第 ${row.row ?? "?"} 列`,
+      return el("div", { class: "issue-row" }, box, issueLine(issue, row ? btn({
+        text: `第 ${row.row ?? "?"} 列`, icon: "arrow", variant: "quiet",
         onclick: () => goTo({ tab: "rows", filter: "all", selected: row.rid }),
       }) : null));
     })) : el("div", { class: "note", text: "沒有警示。" }));
@@ -1213,7 +1397,16 @@ function bind() {
   $("dialog").addEventListener("click", (e) => { if (e.target === $("dialog")) closeDialog(); });
 }
 
+/* 頁面上固定的按鈕：依 data-icon 放進圖示（文字包成 span，圖示和文字的間距才一致） */
+function decorateButtons() {
+  for (const node of document.querySelectorAll("[data-icon]")) {
+    const text = node.textContent.trim();
+    node.replaceChildren(icon(node.dataset.icon), ...(text ? [el("span", { text })] : []));
+  }
+}
+
 async function main() {
+  decorateButtons();
   watchConnection();
   bind();
   setupPanes();
