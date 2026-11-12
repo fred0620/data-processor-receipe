@@ -1,5 +1,6 @@
 # 在 Windows、macOS、Linux 上跑同一套測試。
 # 換版與退回（tests/test_release.py）只在 Windows 上實際執行，其他系統會顯示略過。
+# 介面測試（tests/ui）不在這裡跑：修改介面時在本機加 --ui 執行，見 CLAUDE.md。
 name: tests
 
 on:
@@ -23,17 +24,6 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - name: 測試
         run: uv run --project app pytest tests -q -rs
-
-  # 瀏覽器操作測試（Pop out 視窗能不能照常處理表格）：需要下載 Chromium，所以只在這裡跑
-  ui:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - name: 安裝 Chromium
-        run: uv run --project app --with playwright python -m playwright install --with-deps chromium
-      - name: 瀏覽器操作測試
-        run: uv run --project app --with playwright pytest tests/test_ui_popout.py -q -rs
 
   # 用 .gitlab-ci.yml 指定的同一個映像檔跑 GitLab 的 test 與 package 步驟，
   # 確認映像檔標籤存在、指令在裡面能用。映像檔名稱只寫在 .gitlab-ci.yml，這裡讀出來用。

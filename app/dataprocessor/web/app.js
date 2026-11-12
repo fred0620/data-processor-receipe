@@ -467,7 +467,7 @@ function stageLinks(stage) {
     if (r.excluded.length) items.push(link(`排除 ${r.excluded.length} 列`, null, go({ tab: "excluded" })));
   } else if (stage.id === "normalize") {
     for (const g of stage.groups || []) {
-      items.push(link(`${g.label} ${g.open + g.done} 格`, g.done ? `（已確認 ${g.done}）` : null,
+      items.push(link(`${g.label} ${g.open + g.done} 格`, g.done ? `（已處理 ${g.done}）` : null,
         go({ tab: "issues", issueFilter: "all", issueFocus: { stage: "normalize", code: g.code, label: g.label } })));
     }
   } else if (stage.id === "match") {
@@ -477,7 +477,7 @@ function stageLinks(stage) {
     }
   } else if (stage.id === "validate") {
     for (const check of stage.checks || []) {
-      items.push(link(`${check.message}：${check.rows} 列`, check.done ? `（已確認 ${check.done}）` : null,
+      items.push(link(`${check.message}：${check.rows} 列`, check.done ? `（已處理 ${check.done}）` : null,
         check.rows ? go({ tab: "issues", issueFilter: "all", issueFocus: { code: check.code, label: check.message } }) : null));
     }
   } else if (stage.id === "mapping") {

@@ -1,74 +1,25 @@
 """Pop out 視窗的操作測試：用真的瀏覽器點按鈕，確認 pop out 出來的視窗能照常處理表格，並和主視窗同步。
 
-需要 playwright 與 Chromium。沒有的環境（例如不能連外網的 GitLab runner）會顯示略過，不會假裝通過。
-本機執行：
-    uv run --project app --with playwright python -m playwright install chromium
-    uv run --project app --with playwright pytest tests/test_ui_popout.py
-已經有 Chrome 時可以設定 DP_CHROME=Chrome 執行檔路徑，不用另外下載。
+執行方式見 tests/ui/conftest.py。
 """
 from __future__ import annotations
 
-import os
-import shutil
-import threading
-from pathlib import Path
 
-import pytest
-from werkzeug.serving import make_server
-
-from dataprocessor import server
-
-sync_api = pytest.importorskip("playwright.sync_api", reason="沒有安裝 playwright，略過瀏覽器測試")
-
-
-@pytest.fixture()
-def base_url(tmp_path, monkeypatch):
-    for name in ("RECIPES", "MAPPINGS", "REVIEWS", "UPLOADS", "SCRATCH", "OUTPUT"):
-        monkeypatch.setattr(server.paths, name, tmp_path / name.lower())
-    server.paths.RECIPES.mkdir()
-    examples = Path(__file__).resolve().parent.parent / "app" / "examples" / "workspace"
-    shutil.copy(examples / "recipes" / "invoice-declaration.yaml", server.paths.RECIPES)
-    monkeypatch.setattr(server.paths, "SAMPLES", examples / "samples")
-    httpd = make_server("127.0.0.1", 0, server.app, threaded=True)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    yield f"http://127.0.0.1:{httpd.server_port}"
-    httpd.shutdown()
-
-
-@pytest.fixture()
-def browser():
-    with sync_api.sync_playwright() as p:
-        try:
-            launched = p.chromium.launch(executable_path=os.environ.get("DP_CHROME") or None)
-        except Exception as error:  # 沒有下載 Chromium
-            pytest.skip(f"沒有可用的 Chromium：{str(error).splitlines()[0]}")
-        yield launched
-        launched.close()
-
-
-def test_pop_out_window_can_review_the_table(base_url, browser):
+def test_pop_out_window_can_review_the_table(ui):
     failures = []
 
     def check(ok, what):
         if not ok:
             failures.append(what)
 
-    ctx = browser.new_context(viewport={"width": 1280, "height": 800}, accept_downloads=True)
-    pg = ctx.new_page()
-    errs = []
-    pg.on("pageerror", lambda e: errs.append("main:" + str(e)))
-    pg.goto(base_url + "/")
-    pg.wait_for_timeout(700)
-    pg.click("text=使用範例")
-    pg.wait_for_timeout(300)
-    pg.click("#runButton")
-    pg.wait_for_timeout(1500)
+    pg = ui.run_sample()
+    ctx = ui.context
+    errs = ui.errors
     check(pg.is_visible("text=Pop out ↗"), "主視窗有 Pop out ↗")
     with ctx.expect_page() as info:
         pg.click("text=Pop out ↗")
     w = info.value
-    w.on("pageerror", lambda e: errs.append("pop:"+str(e)))
+    ui.watch(w, "pop")
     w.set_viewport_size({"width":1600,"height":950}); w.wait_for_timeout(1500)
     check(w.is_visible("#popInButton") and w.inner_text("#popInButton") == "Pop in", "pop out 視窗有 Pop in")
     check(not w.is_visible(".setup") and not w.is_visible("#pipeline"), "pop out 視窗沒有左欄與流程卡片")
@@ -166,6 +117,7 @@ def test_pop_out_window_can_review_the_table(base_url, browser):
     check(w.evaluate("state.result.output.rows.find(r=>r.rid==='invoice:11').values['金額']") == 650, "離開輸入框後套用另一個視窗的更新")
     check(w.evaluate("state.result.output.rows.find(r=>r.rid==='invoice:8').values['數量']") == 10, "按 Esc 取消，數量沒有被改")
 
+    ui.shot("popout", page=w)
     w.click("#popInButton"); pg.wait_for_timeout(800)
     check(w.is_closed() and pg.evaluate("state.tab") == "rows", "Pop in：關閉並回到主視窗")
     check(not errs, f"沒有 JS 錯誤 {errs}")

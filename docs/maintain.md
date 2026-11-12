@@ -31,7 +31,7 @@ bash run.sh                                # 或 Windows 雙擊 run.bat，用使
 | 改了使用手冊或換版說明後重建 HTML | `uv run --project app python scripts/build_manual.py` |
 | 新增套件 | `uv add --project app 套件名稱` |
 | 試打包（不含離線套件） | `uv run --project app python scripts/build_release.py` |
-| 瀏覽器操作測試（Pop out 視窗） | `uv run --project app --with playwright python -m playwright install chromium`，再 `uv run --project app --with playwright pytest tests/test_ui_popout.py`。沒有 playwright 時一般的 `pytest tests` 會顯示略過；推到 GitHub 會自動跑 |
+| 介面測試（改介面後一定要跑，不在 CI） | `uv run --project app --with playwright pytest tests/ui --ui`，跑完看 `tests/ui/screens/` 的截圖。第一次要先 `uv run --project app --with playwright python -m playwright install chromium` |
 | 換版與退回測試 | 包含在 `pytest tests` 裡（`tests/test_release.py`），只在 Windows 上實際執行；沒有 Python 的 Windows 電腦可以直接跑 `powershell -ExecutionPolicy Bypass -File tests\release\test_update.ps1`（加 `-Zip 發布包.zip` 測實際的發布包） |
 
 規則：
@@ -42,6 +42,7 @@ bash run.sh                                # 或 Windows 雙擊 run.bat，用使
 - 改到核心邏輯時，用自己電腦上的真實樣本跑一次，和上一版的結果比對。真實樣本不進版控。
 - 要發布新的資料夾或檔案時，加進 `scripts/build_release.py` 的清單；沒列的不會進發布包。
 - 新增套件時，也加進 `__main__.py` 的 doctor 檢查。
+- 修改介面（`app/dataprocessor/web/`、`server.py` 的 API、會影響畫面的結果欄位）後，執行介面測試並看截圖。介面測試用真的瀏覽器點按鈕，涵蓋主視窗的檢查流程、recipe、pop out、不同螢幕寬度的版面。它需要下載 Chromium，所以不放在 CI；一般的 `pytest tests` 不會跑它。新增或改變介面功能時，同時在 `tests/ui/` 補上對應的測試。
 - 改到 `app/launcher.ps1`（尤其換版與退回）時，一定要讓換版測試通過。它在 Windows PowerShell 5.1 上用有空白和中文的資料夾，實際跑更新、退回、壞掉的 ZIP、檔案被鎖住，確認 workspace 不會被動到、失敗時能用原本的版本、也不會弄丟可以退回的上一版。測試只用 Windows 內建的 PowerShell，不需要網路、Python 或 uv，沒有外網的公司電腦也能直接跑；建議發版前在自己的電腦上，用要發布的 ZIP 跑一次。推到 GitHub 時會自動在 Windows、macOS、Linux 上跑全部測試（`.github/workflows/tests.yml`）；GitLab 的 runner 是 Linux，這項會顯示略過，所以發版前要自己在 Windows 上跑一次。
 
 ## 3. 發布新版
