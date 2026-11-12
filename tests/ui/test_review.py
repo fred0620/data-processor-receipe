@@ -206,3 +206,77 @@ def test_export_has_all_sheets(ui, tmp_path):
     download.value.save_as(target)
     book = openpyxl.load_workbook(target)
     assert {"整理結果", "待檢查", "配對明細", "排除", "對照待補"} <= set(book.sheetnames)
+
+
+def test_match_cards_expand_one_by_one(ui):
+    page = ui.run_sample()
+    page.click(".tab:has-text('配對')")
+    page.click(".chip:has-text('全部')")
+    cards = page.locator(".match-card")
+    first, second = cards.nth(0), cards.nth(1)
+    fields = lambda card: card.locator("dl.kv dt").count()   # noqa: E731
+    before_first, before_second = fields(first), fields(second)
+    link = first.locator(".match-foot button")
+    assert "顯示全部欄位（還有" in link.inner_text()
+    link.click()
+    first, second = cards.nth(0), cards.nth(1)
+    assert fields(first) > before_first and fields(second) == before_second   # 只展開這一張
+    assert first.locator(".match-foot button").inner_text() == "收起欄位"
+    first.locator(".match-foot button").click()
+    assert fields(cards.nth(0)) == before_first
+    page.click("button:has-text('全部展開')")
+    assert fields(cards.nth(1)) > before_second and cards.nth(0).locator(".match-foot").count() == 0
+    page.click("button:has-text('全部收起')")
+    assert fields(cards.nth(1)) == before_second
+    ui.shot("match-expand")
+
+
+def _type_slowly(box, text):
+    """像人一樣一個字一個字打，每個字之間停得比搜尋的等待時間（0.2 秒）還久，畫面會在打字途中重畫。"""
+    for char in text:
+        box.page.keyboard.type(char)
+        box.page.wait_for_timeout(300)
+
+
+def _search_box(page, scope=""):
+    return page.locator(f"{scope} input.search").first
+
+
+def test_search_keeps_typing(ui):
+    page = ui.run_sample()
+    page.click(".chip:has-text('全部')")
+    box = _search_box(page)
+    box.click()
+    _type_slowly(box, "INV-1003")
+    box = _search_box(page)
+    assert box.input_value() == "INV-1003", "連續輸入時字不能被吃掉"
+    assert page.evaluate("document.activeElement.matches('input.search')"), "重畫後游標要留在搜尋框"
+    assert page.locator("table.grid tbody tr").count() == 1
+    page.keyboard.press("Backspace")
+    page.wait_for_timeout(400)
+    assert _search_box(page).input_value() == "INV-100" and page.locator("table.grid tbody tr").count() > 1
+    # 游標在中間時，重畫後也要留在原來的位置
+    page.keyboard.press("Home")
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("ArrowRight")
+    page.keyboard.type("x")
+    page.wait_for_timeout(400)
+    page.keyboard.press("Backspace")
+    page.wait_for_timeout(400)
+    assert _search_box(page).input_value() == "INV-100"
+    # 配對的搜尋
+    page.click(".tab:has-text('配對')")
+    page.click(".chip:has-text('全部')")
+    box = _search_box(page, ".tab-body")
+    box.click()
+    _type_slowly(box, "LED")
+    assert _search_box(page, ".tab-body").input_value() == "LED"
+    assert page.evaluate("document.activeElement.matches('input.search')")
+    assert page.locator(".match-card").count() == 2
+    # 手動指定裡的搜尋
+    page.locator(".match-card").first.locator("button:has-text('改選'), button:has-text('手動指定')").first.click()
+    picker = page.locator(".picker input.search, .picker-search input, .match-card input.search").last
+    picker.click()
+    _type_slowly(picker, "AA15A0003")
+    assert picker.input_value() == "AA15A0003" and page.evaluate("document.activeElement === document.querySelectorAll('.match-card input.search')[0] || document.activeElement.closest('.match-card') !== null")

@@ -50,3 +50,56 @@ def test_dialog_fits_small_screen(ui):
     assert box["y"] >= 0 and box["y"] + box["height"] <= 641, "對話框超出視窗高度"
     assert page.locator("#dialog button:has-text('關閉')").is_visible()
     ui.shot("dialog-small")
+
+
+def _drag(page, selector, dx):
+    box = page.locator(selector).bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + 200
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + dx / 2, y, steps=4)
+    page.mouse.move(x + dx, y, steps=4)
+    page.mouse.up()
+
+
+def test_panes_resize_collapse_and_remember(ui):
+    ui.context.pages[0].set_viewport_size({"width": 1600, "height": 900})
+    page = ui.run_sample()
+    width = lambda sel: round(page.locator(sel).bounding_box()["width"])   # noqa: E731
+    side = width(".setup")
+    _drag(page, "#sideSplit", 120)
+    assert abs(width(".setup") - (side + 120)) <= 4, "拖曳左欄的邊界要能調整寬度"
+    _drag(page, "#sideSplit", -600)
+    assert width(".setup") == 200, "左欄最窄 200px"
+    page.dblclick("#sideSplit")
+    assert width(".setup") == 272, "連按兩下恢復預設"
+    page.focus("#sideSplit")
+    page.keyboard.press("ArrowRight")
+    assert width(".setup") == 288, "鍵盤左右鍵也能調整"
+    # 細節面板
+    ui.row("INV-1003").click()
+    drawer = width("#drawer")
+    _drag(page, "#drawerSplit", -200)
+    assert abs(width("#drawer") - (drawer + 200)) <= 4, "拖曳細節的邊界要能調整寬度"
+    work = width(".work")
+    assert work >= 360, "中間至少留 360px"
+    # 記在瀏覽器：重新整理後一樣
+    page = ui.run_sample()
+    assert width(".setup") == 288
+    ui.row("INV-1003").click()
+    assert abs(width("#drawer") - (drawer + 200)) <= 4
+    # 左欄可以收起，結果變寬
+    result = width("#result")
+    page.click("#sideToggle")
+    assert width(".setup") == 0 and width("#result") > result + 200
+    ui.shot("layout-collapsed")
+    page.click("#sideToggle")
+    assert width(".setup") == 288
+
+
+def test_result_uses_full_width(ui):
+    ui.context.pages[0].set_viewport_size({"width": 2200, "height": 1000})
+    page = ui.run_sample()
+    work = page.locator(".work").bounding_box()["width"]
+    result = page.locator("#result").bounding_box()["width"]
+    assert result >= work - 80, "結果區不固定最大寬度，用滿可用空間"

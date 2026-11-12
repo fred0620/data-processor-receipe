@@ -122,7 +122,7 @@ function showProblems(title, problems) {
 const state = {
   recipes: [], recipeId: null, workbook: null, result: null,
   tab: "rows", filter: "review", search: "", selected: null, stageOpen: null,
-  matchName: null, matchFilter: "todo", matchSearch: "", pickerFor: null, matchFocus: null, matchAll: false,
+  matchName: null, matchFilter: "todo", matchSearch: "", pickerFor: null, matchFocus: null, matchAll: false, matchOpen: new Set(),
   issueFilter: "review", issueFocus: null, checked: new Set(),   // issueFocus：只看某一類警示 {stage, code, label}
   traces: {}, openTrace: new Set(),   // 執行紀錄：好奇時才向程式要，要過的先記著
 };
@@ -142,6 +142,64 @@ const prefs = {
     try { window.localStorage.setItem(`dp:${key}`, JSON.stringify(value)); } catch (_e) { /* 無痕或停用儲存時略過 */ }
   },
 };
+
+/* ---------- 版面：左欄與細節可以拖曳調整寬度、左欄可以收起 ---------- */
+const PANES = {
+  side: { split: "sideSplit", css: "--side-w", fallback: 272, min: 200, max: 520, edge: "left" },
+  drawer: { split: "drawerSplit", css: "--drawer-w", fallback: 360, min: 280, max: 900, edge: "right" },
+};
+
+function paneWidth(name, width) {
+  const pane = PANES[name];
+  const room = window.innerWidth - 360;   // 中間至少留 360px 給結果
+  const value = Math.round(Math.max(pane.min, Math.min(pane.max, room, width)));
+  document.querySelector(".layout").style.setProperty(pane.css, `${value}px`);
+  return value;
+}
+
+function setupPanes() {
+  const layout = document.querySelector(".layout");
+  for (const [name, pane] of Object.entries(PANES)) {
+    paneWidth(name, prefs.get(`${name}Width`, pane.fallback));
+    const split = $(pane.split);
+    split.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      split.setPointerCapture(event.pointerId);
+      split.classList.add("dragging");
+      document.body.classList.add("resizing");
+      const box = layout.getBoundingClientRect();
+      const move = (e) => paneWidth(name, pane.edge === "left" ? e.clientX - box.left : box.right - e.clientX);
+      const stop = () => {
+        split.removeEventListener("pointermove", move);
+        split.classList.remove("dragging");
+        document.body.classList.remove("resizing");
+        prefs.set(`${name}Width`, parseInt(getComputedStyle(layout).getPropertyValue(pane.css), 10));
+      };
+      split.addEventListener("pointermove", move);
+      split.addEventListener("pointerup", stop, { once: true });
+      split.addEventListener("pointercancel", stop, { once: true });
+    });
+    split.addEventListener("dblclick", () => prefs.set(`${name}Width`, paneWidth(name, pane.fallback)));
+    split.addEventListener("keydown", (event) => {   // 鍵盤也能調整：左右鍵
+      const step = { ArrowLeft: -16, ArrowRight: 16 }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      const now = parseInt(getComputedStyle(layout).getPropertyValue(pane.css), 10);
+      prefs.set(`${name}Width`, paneWidth(name, now + (pane.edge === "left" ? step : -step)));
+    });
+  }
+  const collapse = (on) => {
+    layout.classList.toggle("side-collapsed", on);
+    $("sideToggle").textContent = on ? "›" : "‹";
+    $("sideToggle").title = on ? "展開左欄" : "收起左欄";
+    prefs.set("sideCollapsed", on);
+  };
+  collapse(prefs.get("sideCollapsed", false));
+  $("sideToggle").addEventListener("click", () => collapse(!layout.classList.contains("side-collapsed")));
+  window.addEventListener("resize", () => {
+    for (const [name, pane] of Object.entries(PANES)) paneWidth(name, prefs.get(`${name}Width`, pane.fallback));
+  });
+}
 
 /* ---------- Recipe ---------- */
 async function loadRecipes(selectId) {
@@ -325,68 +383,137 @@ async function act(path, body) {
   } catch (error) { showError(error); return false; }
 }
 
-/* ---------- 獨立視窗（pop out / pop in） ---------- */
-/* 結果可以開在另一個瀏覽器視窗，拖到另一個螢幕看完整的表格。
-   每個視窗都能修改；任何一個視窗更新結果，其他視窗用 BroadcastChannel 同步，不必重新整理。 */
+/* ---------- Pop out / Pop in ---------- */
+/* Pop out 把「目前的分頁」搬到另一個瀏覽器視窗，可以拖到另一個螢幕看完整的表格。
+   搬出去的分頁在主視窗只留一行說明，不會兩邊各顯示一份；其他分頁照常在主視窗使用，
+   所以兩個螢幕可以看不同的東西（例如一邊看結果、一邊處理配對）。
+   每個視窗都能修改，任何一個視窗更新結果，其他視窗用 BroadcastChannel 同步。
+   從一個視窗跳到另一個視窗的分頁（例如在結果裡按「前往配對」），會交給擁有那個分頁的視窗顯示。 */
 const pageParams = new URLSearchParams(location.search);
 const isPopout = pageParams.has("run");
+const ownTab = isPopout ? (pageParams.get("tab") || "rows") : null;
 const channel = window.BroadcastChannel ? new BroadcastChannel("dataprocessor") : null;
-const popups = new Set();
+const popped = new Map();   // 主視窗：分頁 → pop out 視窗（重新整理後拿不到視窗，只知道分頁在外面）
+const TAB_NAMES = { rows: "結果", match: "配對", mapping: "對照表", excluded: "排除", issues: "所有警示" };
 
 function popOut() {
+  const tab = state.tab;
+  const known = popped.get(tab);
+  if (known && known.win && !known.win.closed) { known.win.focus(); return; }
   const r = state.result;
-  const url = `/?run=${encodeURIComponent(r.run_id)}&tab=${encodeURIComponent(state.tab)}`;
+  const url = `/?run=${encodeURIComponent(r.run_id)}&tab=${encodeURIComponent(tab)}`;
   const w = Math.min(screen.availWidth, 1600), h = Math.min(screen.availHeight, 1000);
-  const win = window.open(url, `dp-${r.run_id}-${Date.now()}`, `popup,width=${w},height=${h}`);
+  const win = window.open(url, `dp-${tab}`, `popup,width=${w},height=${h}`);
   if (!win) { toast("瀏覽器擋下了新視窗，請允許這個網站開啟彈出式視窗後再試一次", true); return; }
-  popups.add(win);
+  popped.set(tab, { win });
+  const rest = tabList().find(([id]) => !popped.has(id));   // 主視窗換到還在這裡的分頁
+  if (rest) { state.tab = rest[0]; state.issueFocus = null; }
   renderTabs();
 }
 
 function popInAll() {
-  for (const win of popups) if (!win.closed) win.close();
-  popups.clear();
+  channel?.postMessage({ type: "popin-all" });
+  for (const { win } of popped.values()) if (win && !win.closed) win.close();
+  popped.clear();
   renderTabs();
 }
 
-function openPopups() {
-  for (const win of popups) if (win.closed) popups.delete(win);
-  return popups.size;
-}
-
 function popIn() {
-  channel?.postMessage({ type: "popin", tab: state.tab, run_id: state.result?.run_id });
+  channel?.postMessage({ type: "popin", tab: ownTab, run_id: state.result?.run_id, view: viewState() });
   window.close();
   // 不是由主視窗開的（例如重新整理過），關不掉時就回到一般畫面
   setTimeout(() => { location.href = "/"; }, 300);
+}
+
+/* Pop in 時把這個分頁的檢視狀態（篩選、搜尋、選到的列）帶回主視窗，不用重新找 */
+function viewState() {
+  const keys = ["filter", "search", "selected", "matchName", "matchFilter", "matchSearch", "matchFocus", "issueFilter", "issueFocus"];
+  return Object.fromEntries(keys.map((k) => [k, state[k]]));
+}
+
+/* 換到某個分頁：分頁在另一個視窗時交給那個視窗顯示，並切過去 */
+function goTo(changes) {
+  const tab = changes.tab || state.tab;
+  if (isPopout && tab !== ownTab) {
+    channel?.postMessage({ type: "show", target: "main", changes });
+    try { window.opener?.focus(); } catch (_e) { /* 主視窗已關閉 */ }
+    toast(`已在主視窗打開「${TAB_NAMES[tab] || tab}」`);
+    return;
+  }
+  if (!isPopout && popped.has(tab)) {
+    channel?.postMessage({ type: "show", target: tab, changes });
+    popped.get(tab).win?.focus();
+    toast(`已在 pop out 視窗打開「${TAB_NAMES[tab] || tab}」`);
+    return;
+  }
+  Object.assign(state, changes);
+  renderTabs();
 }
 
 channel?.addEventListener("message", ({ data }) => {
   if (data.type === "result") {
     const same = state.result && state.result.run_id === data.result.run_id;
     if (same) setResult(data.result, false, true);
-    else if (isPopout) setResult(data.result, true, true);   // 主視窗換了新的處理，獨立視窗跟著換
-  } else if (data.type === "popin" && !isPopout) {
-    if (state.result && data.run_id === state.result.run_id) { state.tab = data.tab; renderTabs(); }
+    else if (isPopout) setResult(data.result, true, true);   // 主視窗換了新的處理，pop out 視窗跟著換
+  } else if (data.type === "show") {
+    if (isPopout && data.target === ownTab) { Object.assign(state, data.changes, { tab: ownTab }); renderTabs(); window.focus(); }
+    if (!isPopout && data.target === "main") { goTo(data.changes); window.focus(); }
+  } else if (isPopout) {
+    if (data.type === "popin-all" || (data.type === "popin-tab" && data.tab === ownTab)) popIn();
+    if (data.type === "ping") channel.postMessage({ type: "hello", tab: ownTab });
+  } else if (data.type === "hello") {
+    if (!popped.has(data.tab)) popped.set(data.tab, { win: null });
+    if (state.result) renderTabs();
+  } else if (data.type === "closed") {
+    popped.delete(data.tab);
+    if (state.result) renderTabs();
+  } else if (data.type === "popin") {
+    popped.delete(data.tab);
+    if (state.result && data.run_id === state.result.run_id) { Object.assign(state, data.view || {}, { tab: data.tab }); renderTabs(); }
     window.focus();
-  } else if (data.type === "closed" && !isPopout) {
-    renderTabs();
   }
 });
+
+if (!isPopout) {
+  channel?.postMessage({ type: "ping" });   // 主視窗重新整理後，問問看哪些分頁還在外面
+  setInterval(() => {                         // 視窗被直接關掉、來不及通知時
+    let changed = false;
+    for (const [tab, { win }] of popped) if (win && win.closed) { popped.delete(tab); changed = true; }
+    if (changed && state.result) renderTabs();
+  }, 1500);
+}
 
 async function startPopout() {
   document.body.classList.add("popout");
   $("popInButton").hidden = false;
   $("popInButton").addEventListener("click", popIn);
-  window.addEventListener("pagehide", () => channel?.postMessage({ type: "closed" }));
+  window.addEventListener("pagehide", () => channel?.postMessage({ type: "closed", tab: ownTab }));
+  channel?.postMessage({ type: "hello", tab: ownTab });
   try {
+    state.tab = ownTab;
     setResult(await api(`/api/runs/${encodeURIComponent(pageParams.get("run"))}`), true, true);
-    const tab = pageParams.get("tab");
-    if (tab) { state.tab = tab; renderTabs(); }
   } catch (error) {
     put($("empty"), el("h2", { text: "這個結果已經不在了" }),
       el("p", { class: "muted", text: "工具重新啟動過，或主視窗已經換成別的處理。請關閉這個視窗，回到主視窗重新執行。" }));
   }
+}
+
+/* 主視窗裡已經 pop out 的分頁：只留一行說明，不重複顯示同一份內容 */
+function renderPoppedNote() {
+  const name = TAB_NAMES[state.tab] || state.tab;
+  const known = popped.get(state.tab);
+  put($("tabBody"), el("div", { class: "popped-note" },
+    el("h3", { text: `「${name}」在 pop out 視窗` }),
+    el("p", { class: "muted", text: "在那個視窗做的修改，會同步到這裡的其他分頁。" }),
+    el("div", { class: "actions-row" },
+      known && known.win && !known.win.closed
+        ? el("button", { type: "button", class: "ghost small", text: "切到那個視窗", onclick: () => known.win.focus() }) : null,
+      el("button", { type: "button", class: "primary small", text: "Pop in", onclick: () => {
+        channel?.postMessage({ type: "popin-tab", tab: state.tab });
+        if (known && known.win && !known.win.closed) known.win.close();
+        popped.delete(state.tab);
+        renderTabs();
+      } }))));
 }
 
 /* 另一個視窗更新時，若這個視窗正在打字（細節的欄位、搜尋框），先不重畫，離開輸入框後再更新，打到一半的字不會不見 */
@@ -407,7 +534,8 @@ function setResult(result, fresh = false, remote = false) {
   if (isPopout) document.title = `${result.recipe.name}・${result.workbook.name}`;
   state.traces = {};
   if (fresh) {
-    state.tab = result.status === "error" ? "issues" : "rows";
+    state.tab = isPopout ? ownTab : result.status === "error" ? "issues" : "rows";
+    if (!isPopout && popped.has(state.tab)) state.tab = (tabList(result).find(([id]) => !popped.has(id)) || [state.tab])[0];
     state.filter = result.counts.review ? "review" : "all";
     state.issueFilter = result.status === "error" ? "all" : "review";
     state.matchName = result.matches[0]?.name || null;
@@ -455,7 +583,7 @@ function renderPipeline() {
 /* 每張卡片都可以直接跳到相關的列：卡片上的數字和點進去看到的是同一批 */
 function stageLinks(stage) {
   const r = state.result;
-  const go = (changes) => () => { Object.assign(state, { issueFocus: null }, changes); renderTabs(); };
+  const go = (changes) => () => goTo({ issueFocus: null, ...changes });
   const issuesOf = (test) => activeIssues().filter(test);
   const items = [];
   const link = (text, extra, onclick) => el("li", {}, text, extra ? el("span", { class: "muted", text: extra }) : null,
@@ -496,28 +624,39 @@ function stageLinks(stage) {
 
 function activeIssues() { return state.result.issues.filter((i) => i.level !== "skip"); }
 
-function renderTabs() {
-  const r = state.result;
+function tabList(r = state.result) {
   const pendingMaps = r.unmapped.filter((u) => u.missing === "ask").length;
   const todo = r.matches.reduce((n, m) => n + (m.counts.todo || 0), 0);
-  const open = activeIssues().filter((i) => !i.dismissed && i.level !== "notice").length;
-  const tabs = [
+  const open = r.issues.filter((i) => i.level !== "skip" && !i.dismissed && i.level !== "notice").length;
+  return [
     ["rows", "結果", r.output.rows.filter((x) => x.status === "review").length],
     r.matches.length ? ["match", "配對", todo] : null,
     r.mappings.length ? ["mapping", "對照表", pendingMaps] : null,
     r.excluded.length ? ["excluded", "排除", r.excluded.length, true] : null,
     ["issues", "所有警示", open],
   ].filter(Boolean);
-  if (!tabs.some((t) => t[0] === state.tab)) state.tab = "rows";
-  const opened = isPopout ? 0 : openPopups();
+}
+
+function renderTabs() {
+  let tabs = tabList();
+  if (isPopout) {
+    state.tab = ownTab;
+    tabs = tabs.filter(([id]) => id === ownTab);   // pop out 視窗只負責一個分頁
+  }
+  if (!tabs.some((t) => t[0] === state.tab)) state.tab = tabs[0]?.[0] || "rows";
+  const away = (id) => !isPopout && popped.has(id);
   put($("tabs"), tabs.map(([id, label, n, plain]) => el("button", {
-    type: "button", class: `tab${state.tab === id ? " active" : ""}`, onclick: () => { state.tab = id; state.issueFocus = null; renderTabs(); },
-  }, label, n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)),
+    type: "button", class: `tab${state.tab === id ? " active" : ""}${away(id) ? " away" : ""}`,
+    title: away(id) ? "在 pop out 視窗" : null,
+    onclick: () => { if (!isPopout) { state.tab = id; state.issueFocus = null; renderTabs(); } },
+  }, label, away(id) ? el("span", { class: "away-mark", text: "↗" }) : null,
+  n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)),
   isPopout ? null : el("div", { class: "tab-tools" },
-    opened ? el("span", { class: "muted", text: `${opened} 個 pop out 視窗` }) : null,
-    opened ? el("button", { type: "button", class: "ghost small", text: "全部 Pop in", onclick: popInAll }) : null,
-    el("button", { type: "button", class: "ghost small", text: "Pop out ↗", title: "在另一個視窗開啟結果，可以拖到另一個螢幕看完整的表格。兩邊的修改會同步。", onclick: popOut })));
-  ({ rows: renderRows, match: renderMatch, mapping: renderMapping, excluded: renderExcluded, issues: renderIssues })[state.tab]();
+    popped.size ? el("button", { type: "button", class: "ghost small", text: "全部 Pop in", onclick: popInAll }) : null,
+    away(state.tab) ? null : el("button", { type: "button", class: "ghost small", text: "Pop out ↗",
+      title: "把這個分頁搬到另一個視窗，可以拖到另一個螢幕看完整的表格。兩邊的修改會同步。", onclick: popOut })));
+  if (away(state.tab)) renderPoppedNote();
+  else ({ rows: renderRows, match: renderMatch, mapping: renderMapping, excluded: renderExcluded, issues: renderIssues })[state.tab]();
   renderDrawer();
 }
 
@@ -527,11 +666,24 @@ function chips(options, current, onPick) {
   })));
 }
 
-function searchBox(value, placeholder, onInput) {
-  const input = el("input", { class: "search", type: "search", placeholder });
+/* 搜尋時會重畫整個分頁，搜尋框也跟著重建；重畫後把游標放回新的搜尋框原本的位置，才能連續打字 */
+function searchBox(value, placeholder, onInput, key) {
+  const input = el("input", { class: "search", type: "search", placeholder, dataset: { key } });
   input.value = value;
   let timer;
-  input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => onInput(input.value), 200); });
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const typing = document.activeElement === input;
+      const [start, end] = [input.selectionStart, input.selectionEnd];
+      onInput(input.value);
+      const next = document.querySelector(`input.search[data-key="${key}"]`);
+      if (typing && next && next !== input) {
+        next.focus();
+        next.setSelectionRange(start, end);
+      }
+    }, 200);
+  });
   return input;
 }
 
@@ -617,7 +769,7 @@ function renderRows(keepMenu = false) {
   put($("tabBody"),
     el("div", { class: "toolbar" },
       chips([["review", "需檢查"], ["confirmed", "已確認"], ["all", "全部"]], state.filter, (id) => { state.filter = id; renderTabs(); }),
-      searchBox(state.search, "搜尋", (v) => { state.search = v; renderRows(); }),
+      searchBox(state.search, "搜尋", (v) => { state.search = v; renderRows(); }, "rows"),
       el("span", { class: "spacer" }),
       el("span", { class: "muted", text: `${rows.length} 列` }),
       menu,
@@ -636,7 +788,7 @@ function issueLine(issue, extra = null) {
   if (issue.ref && issue.rid && state.result.matches.some((m) => m.name === issue.ref)) {
     actions.push(el("button", { type: "button", class: "link", text: "前往配對", onclick: () => focusMatch(issue.ref, issue.rid.split("|")[0]) }));
   }
-  if (issue.code === "unmapped" && !issue.resolved) actions.push(el("button", { type: "button", class: "link", text: "補對照", onclick: () => { state.tab = "mapping"; renderTabs(); } }));
+  if (issue.code === "unmapped" && !issue.resolved) actions.push(el("button", { type: "button", class: "link", text: "補對照", onclick: () => goTo({ tab: "mapping" }) }));
   if (extra) actions.push(extra);
   if (issue.level !== "error" && !issue.resolved) {   // 修改、補對照、配對要到原本的地方還原
     actions.push(el("button", {
@@ -736,14 +888,13 @@ function traceList(row, pick) {
 
 /* ---------- 配對 ---------- */
 function focusMatch(name, rid) {
-  Object.assign(state, { tab: "match", matchName: name, matchFilter: "all", matchFocus: rid, matchSearch: "" });
-  renderTabs();
+  goTo({ tab: "match", matchName: name, matchFilter: "all", matchFocus: rid, matchSearch: "", pickerFor: null });
 }
 
 /* 先顯示比對用到的欄位，其他欄位收起來，避免一張卡片塞太多字 */
-function pickColumns(values, preferred) {
+function pickColumns(values, preferred, all = false) {
   const keys = Object.keys(values);
-  if (state.matchAll) return keys;
+  if (all) return keys;
   const shown = preferred.filter((k) => keys.includes(k));
   for (const k of keys) {
     if (shown.length >= Math.max(3, preferred.length)) break;
@@ -803,11 +954,12 @@ function renderMatch() {
       chips([["todo", `需處理 ${c.todo}`], ["all", `全部 ${match.rows.length}`],
         ["manual", `已確認 ${match.rows.filter((x) => ["manual", "none", "confirmed"].includes(x.status) || x.acknowledged).length}`]],
         state.matchFilter, (id) => { Object.assign(state, { matchFilter: id, matchFocus: null }); renderTabs(); }),
-      searchBox(state.matchSearch, "搜尋", (v) => { state.matchSearch = v; renderMatch(); }),
+      searchBox(state.matchSearch, "搜尋", (v) => { state.matchSearch = v; renderMatch(); }, "match"),
       state.matchFocus ? el("button", { type: "button", class: "ghost small", text: "顯示全部", onclick: () => { state.matchFocus = null; renderTabs(); } }) : null,
       el("span", { class: "spacer" }),
-      el("button", { type: "button", class: "ghost small", text: state.matchAll ? "只看比對欄位" : "顯示全部欄位",
-        onclick: () => { state.matchAll = !state.matchAll; renderMatch(); } })),
+      el("button", { type: "button", class: "ghost small", text: state.matchAll ? "全部收起" : "全部展開",
+        title: "每張卡片也可以用卡片下方的連結各自展開",
+        onclick: () => { state.matchAll = !state.matchAll; state.matchOpen.clear(); renderMatch(); } })),
     el("p", { class: "match-meta muted" }, `拿每一列${match.left_label}找對應的${match.right_label}（${match.mode_label}）。依序嘗試：${match.strategies.join(" → ")}`,
       match.multi && match.pairs ? `，共 ${match.pairs} 組` : ""),
     rows.length ? el("div", { class: "match-list" }, rows.slice(0, 200).map((row) => matchCard(match, row)))
@@ -829,10 +981,12 @@ function matchCard(match, row) {
   }
   const decide = (rights) => { state.pickerFor = null; return act("match", { match: match.name, left: row.left, rights }); };
   const reviewIssue = state.result.issues.find((i) => i.code === "match_review" && i.rid === row.left && i.ref === match.name);
-  const leftColumns = pickColumns(left.values, match.show.left).filter((k) => !match.left_title.includes(k));
+  /* 每張卡片可以各自展開全部欄位；上方的「全部展開」一次展開所有卡片 */
+  const expanded = state.matchAll || state.matchOpen.has(row.left);
+  const leftColumns = pickColumns(left.values, match.show.left, expanded).filter((k) => !match.left_title.includes(k));
   const candidates = row.candidates.map((c) => match.right_rows[c.rid]).filter(Boolean);
   const sample = match.right_rows[row.rights[0]] || candidates[0] || Object.values(match.right_rows)[0];
-  const baseRight = sample ? pickColumns(sample.values, match.show.right) : [];
+  const baseRight = sample ? pickColumns(sample.values, match.show.right, expanded) : [];
   const rightColumns = uniq([...baseRight, ...differingColumns(candidates)]).filter((k) => !match.right_title.includes(k));
   const togglePicker = () => { state.pickerFor = state.pickerFor === row.left ? null : row.left; renderMatch(); };
 
@@ -882,7 +1036,19 @@ function matchCard(match, row) {
       el("div", { class: "side" }, el("h4", { text: match.left_label }), el("div", { class: "side-title" }, rowTitle(left, match.left_title)),
         valuesList(left.values, leftColumns)),
       el("div", { class: "side" }, el("h4", { text: match.right_label + (match.multi && row.rights.length ? `・${row.rights.length} 筆` : "") }), side,
-        state.pickerFor === row.left ? picker(match, row, rightColumns, decide) : null)));
+        state.pickerFor === row.left ? picker(match, row, rightColumns, decide) : null)),
+    expandToggle(match, row, left, sample, leftColumns, rightColumns, expanded));
+}
+
+function expandToggle(match, row, left, sample, leftColumns, rightColumns, expanded) {
+  const total = Object.keys(left.values).filter((k) => !match.left_title.includes(k)).length
+    + (sample ? Object.keys(sample.values).filter((k) => !match.right_title.includes(k)).length : 0);
+  const hidden = total - leftColumns.length - rightColumns.length;
+  if (state.matchAll || (!expanded && hidden <= 0)) return null;
+  return el("footer", { class: "match-foot" }, el("button", {
+    type: "button", class: "link", text: expanded ? "收起欄位" : `顯示全部欄位（還有 ${hidden} 欄）`,
+    onclick: () => { state.matchOpen[expanded ? "delete" : "add"](row.left); renderMatch(); },
+  }));
 }
 
 function picker(match, row, columns, decide) {
@@ -998,7 +1164,7 @@ function renderIssues() {
       box.addEventListener("change", () => { box.checked ? state.checked.add(issue.key) : state.checked.delete(issue.key); renderTabs(); });
       return el("div", { class: "issue-row" }, box, issueLine(issue, row ? el("button", {
         type: "button", class: "link", text: `第 ${row.row ?? "?"} 列`,
-        onclick: () => { Object.assign(state, { tab: "rows", filter: "all", selected: row.rid }); renderTabs(); },
+        onclick: () => goTo({ tab: "rows", filter: "all", selected: row.rid }),
       }) : null));
     })) : el("div", { class: "note", text: "沒有警示。" }));
 }
@@ -1050,6 +1216,7 @@ function bind() {
 async function main() {
   watchConnection();
   bind();
+  setupPanes();
   if (isPopout) {
     const status = await api("/api/status").catch(() => ({}));
     $("version").textContent = status.version ? `v${status.version}` : "";

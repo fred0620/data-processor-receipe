@@ -1,125 +1,130 @@
-"""Pop out 視窗的操作測試：用真的瀏覽器點按鈕，確認 pop out 出來的視窗能照常處理表格，並和主視窗同步。
+"""Pop out / Pop in：用真的瀏覽器點按鈕。
 
-執行方式見 tests/ui/conftest.py。
+Pop out 把目前的分頁搬到另一個視窗：主視窗不再重複顯示那個分頁，只留說明；其他分頁照常使用。
+兩邊的修改即時同步；跳到另一個視窗的分頁時，交給擁有那個分頁的視窗顯示。執行方式見 tests/ui/conftest.py。
 """
 from __future__ import annotations
 
 
-def test_pop_out_window_can_review_the_table(ui):
-    failures = []
+def _pop_out(ui, page):
+    with ui.context.expect_page() as info:
+        page.click(".tab-tools button:has-text('Pop out ↗')")
+    win = ui.watch(info.value, "pop")
+    win.set_viewport_size({"width": 1600, "height": 950})
+    win.wait_for_selector("#result:not([hidden]) .tab-body *")
+    win.wait_for_timeout(500)
+    return win
 
-    def check(ok, what):
-        if not ok:
-            failures.append(what)
 
-    pg = ui.run_sample()
-    ctx = ui.context
-    errs = ui.errors
-    check(pg.is_visible("text=Pop out ↗"), "主視窗有 Pop out ↗")
-    with ctx.expect_page() as info:
-        pg.click("text=Pop out ↗")
-    w = info.value
-    ui.watch(w, "pop")
-    w.set_viewport_size({"width":1600,"height":950}); w.wait_for_timeout(1500)
-    check(w.is_visible("#popInButton") and w.inner_text("#popInButton") == "Pop in", "pop out 視窗有 Pop in")
-    check(not w.is_visible(".setup") and not w.is_visible("#pipeline"), "pop out 視窗沒有左欄與流程卡片")
-    rows = lambda: w.locator("table.grid tbody tr")
+def test_pop_out_moves_the_tab_and_keeps_windows_in_sync(ui):
+    main = ui.run_sample()
+    w = _pop_out(ui, main)
 
-    # 1 表格
-    n_review = rows().count()
-    w.click(".chip:has-text('全部')"); w.wait_for_timeout(200)
-    n_all = rows().count()
-    check(n_all > n_review, f"篩選：需檢查 {n_review} 列，全部 {n_all} 列")
-    w.fill("input.search", "LED"); w.wait_for_timeout(500)
-    check(rows().count() == 2, "搜尋 LED 剩 2 列")
-    w.fill("input.search", ""); w.wait_for_timeout(500)
-    w.click("summary:has-text('欄位')"); w.click(".menu-body label:has-text('匯率') input"); w.wait_for_timeout(200)
-    heads = w.locator("table.grid thead th").all_inner_texts()
-    check("匯率" not in heads and w.is_visible(".menu-body"), "欄位選單：隱藏匯率，選單保持開著")
-    w.click(".menu-body label:has-text('匯率') input"); w.click("summary:has-text('欄位')"); w.wait_for_timeout(200)
-    w.click("button:has-text('顯示換行')"); w.wait_for_timeout(200)
-    check(w.locator("table.grid.wrap").count() == 1, "顯示換行")
-    w.click("button:has-text('壓成一行')"); w.click("button:has-text('緊湊')"); w.wait_for_timeout(200)
-    check(w.locator("table.grid.dense").count() == 1, "緊湊")
-    w.click("button:has-text('寬鬆')")
+    # 主視窗：結果搬出去了，換到配對；結果分頁標上 ↗，點進去只有說明，不重複顯示表格
+    assert ui.state("state.tab") == "match"
+    assert main.locator(".tab.away:has-text('結果') .away-mark").count() == 1
+    main.click(".tab:has-text('結果')")
+    assert main.is_visible(".popped-note:has-text('在 pop out 視窗')") and main.locator("table.grid").count() == 0
+    assert not main.is_visible(".tab-tools button:has-text('Pop out ↗')")   # 已經搬出去的分頁不能再搬一次
 
-    # 2 單列細節
-    w.click("table.grid tbody tr:has-text('INV-1006')"); w.wait_for_timeout(400)
-    check(w.is_visible("#drawer"), "點一列打開細節")
-    amount = w.locator(".field:has(label:text-is('金額')) input")
-    amount.fill("300"); amount.press("Enter"); w.wait_for_timeout(1500)
-    cell = w.locator("table.grid tbody tr:has-text('INV-1006') td.cell-edited").count()
-    check(cell == 1, "在細節改金額後，表格格子變成已修改")
-    check(pg.evaluate("state.result.output.rows.find(r=>r.rid==='invoice:9').values['金額']") == 300, "主視窗同步看到修改")
-    name = w.locator(".field:has(label:text-is('品名')) textarea")
-    name.click(); name.press("End"); name.press("Shift+Enter"); name.type("第二行"); name.press("Enter"); w.wait_for_timeout(1500)
-    v = w.evaluate("state.result.output.rows.find(r=>r.rid==='invoice:9').values['品名']")
-    check(v == "線材組\n第二行", f"多行文字 Shift+Enter 換行、Enter 儲存：{v!r}")
-    w.click(".field:has(label:text-is('品名')) .hint button:has-text('還原')"); w.wait_for_timeout(1500)
-    check(w.evaluate("state.result.output.rows.find(r=>r.rid==='invoice:9').values['品名']") == "線材組", "還原")
-    w.hover(".field:has(label:text-is('金額')) .field-label"); w.click(".field:has(label:text-is('金額')) button.why"); w.wait_for_timeout(800)
-    check(w.locator(".field:has(label:text-is('金額')) .trace").count() == 1, "怎麼來的")
-    w.click("summary:has-text('這一列的處理過程')"); w.wait_for_timeout(800)
-    check(w.locator(".row-trace .trace").count() == 1, "這一列的處理過程")
-    w.screenshot(path="pop_drawer.png")
-    w.click("#drawerClose")
+    # pop out 視窗：只有結果這個分頁，沒有左欄和流程卡片，表格用滿寬度
+    assert w.locator(".tab").all_inner_texts()[0].startswith("結果") and w.locator(".tab").count() == 1
+    assert w.inner_text("#popInButton") == "Pop in"
+    assert not w.is_visible(".setup") and not w.is_visible("#pipeline")
+    rows = w.locator("table.grid tbody tr")
+    review = rows.count()
+    w.click(".chip:has-text('全部')")
+    assert rows.count() > review
+    w.fill("input.search", "LED")
+    w.wait_for_timeout(400)
+    assert rows.count() == 2
+    w.fill("input.search", "")
+    w.wait_for_timeout(400)
+    w.click("summary:has-text('欄位')")
+    w.click(".menu-body label:has-text('匯率') input")
+    assert "匯率" not in w.locator("table.grid thead th").all_inner_texts()
+    w.click(".menu-body label:has-text('匯率') input")
+    w.click("summary:has-text('欄位')")
+    w.click("button:has-text('顯示換行')")
+    assert w.locator("table.grid.wrap").count() == 1
+    w.click("button:has-text('壓成一行')")
 
-    # 3 配對
-    w.click(".tab:has-text('配對')"); w.wait_for_timeout(400)
-    card = w.locator(".match-card:has-text('INV-1009')").first
-    card.locator("button:has-text('選這筆')").first.click(); w.wait_for_timeout(1500)
-    st = w.evaluate("state.result.matches[0].rows.find(r=>r.left==='invoice:12').status")
-    check(st == "manual", "配對：選這筆")
-    other = w.locator(".match-card:has-text('INV-1010')").first
-    other.locator("button:has-text('確認正確')").click(); w.wait_for_timeout(1500)
-    st = w.evaluate("state.result.matches[0].rows.find(r=>r.left==='invoice:13').status")
-    check(st == "confirmed", "配對：確認正確（刪去法剩下的那筆）")
-    w.screenshot(path="pop_match.png")
+    # 在 pop out 視窗修改 → 主視窗同步
+    ui.row("INV-1006", page=w).click()
+    amount = ui.field("金額", page=w).locator("input")
+    amount.fill("300")
+    amount.press("Enter")
+    ui.settle(w)
+    assert ui.state("state.result.output.rows.find(r => r.rid === 'invoice:9').values['金額']") == 300
+    name = ui.field("品名", page=w).locator("textarea")
+    name.click()
+    name.press("End")
+    name.press("Shift+Enter")
+    name.type("第二行")
+    name.press("Enter")
+    ui.settle(w)
+    assert ui.state("state.result.output.rows.find(r => r.rid === 'invoice:9').values['品名']", page=w) == "線材組\n第二行"
+    ui.field("品名", page=w).locator(".hint button:has-text('還原')").click()
+    ui.settle(w)
+    w.click("#drawer summary:has-text('這一列的處理過程')")
+    ui.settle(w)
+    assert "來自發票" in w.inner_text("#drawer .row-trace")
+    ui.shot("popout-rows", page=w)
 
-    # 4 對照表
-    w.click(".tab:has-text('對照表')"); w.wait_for_timeout(400)
-    w.select_option(".tab-body select", "SEA"); w.click(".tab-body button:has-text('儲存')"); w.wait_for_timeout(1500)
-    check(not w.evaluate("state.result.unmapped.length"), "對照表：補上對照")
+    # 從 pop out 視窗跳到配對：交給主視窗顯示
+    ui.row("INV-1009", page=w).click()
+    w.click("#drawer button:has-text('前往配對')")
+    ui.settle()
+    assert ui.state("state.tab") == "match" and ui.state("state.matchFocus") == "invoice:12"
+    assert ui.state("state.tab", page=w) == "rows"
+    # 在主視窗選配對 → pop out 視窗同步
+    main.locator(".match-card:has-text('INV-1009') button:has-text('選這筆')").first.click()
+    ui.settle(w)
+    assert ui.state("state.result.output.rows.find(r => r.rid === 'invoice:12').values['報單號碼']", page=w)
+    # 從主視窗的流程卡片跳到結果：交給 pop out 視窗顯示
+    main.locator("#pipeline .stage", has_text="Export").click()
+    main.click("#stageDetail li:has-text('需檢查') button:has-text('查看')")
+    ui.settle(w)
+    assert ui.state("state.filter", page=w) == "review" and ui.state("state.tab") == "match"
 
-    # 5 所有警示
-    w.click(".tab:has-text('所有警示')"); w.wait_for_timeout(400)
-    before = w.evaluate("state.result.issues.filter(i=>!i.dismissed && i.level==='review').length")
-    w.click("button:has-text('全選')"); w.click("button:has-text('確認無誤（')"); w.wait_for_timeout(1500)
-    after = w.evaluate("state.result.issues.filter(i=>!i.dismissed && i.level==='review').length")
-    check(after < before, f"所有警示：全選確認（{before} → {after}）")
+    # 另一個視窗更新時，正在打的字不會被清掉、也不會被自動存起來
+    w.click(".chip:has-text('全部')")
+    ui.row("INV-1005", page=w).click()
+    qty = ui.field("數量", page=w).locator("input")
+    qty.click()
+    qty.fill("12")
+    ui.page.evaluate("act('edit', {rid: 'invoice:11', column: '金額', value: '650'})")
+    ui.settle(w)
+    assert qty.input_value() == "12"
+    assert ui.state("state.result.output.rows.find(r => r.rid === 'invoice:8').values['數量']", page=w) == 10
+    qty.press("Escape")
+    ui.settle(w)
+    assert ui.state("state.result.output.rows.find(r => r.rid === 'invoice:11').values['金額']", page=w) == 650
 
-    # 6 重新檢查與復原
-    d = w.evaluate("state.result.decisions")
-    w.click("#resetButton"); w.click("#resetButton"); w.wait_for_timeout(1500)
-    check(w.evaluate("state.result.decisions") == 0, f"重新檢查：清掉 {d} 項")
-    w.click(".toast-action"); w.wait_for_timeout(1500)
-    check(w.evaluate("state.result.decisions") == d, "復原")
-    check(pg.evaluate("state.result.decisions") == d, "主視窗同步")
+    # 第二個分頁也搬出去：配對
+    main.click(".tab:has-text('配對')")
+    w2 = _pop_out(ui, main)
+    assert w2.locator(".tab").count() == 1 and w2.locator(".match-card").count() >= 1
+    assert ui.state("state.tab") not in ("rows", "match")
+    assert main.is_visible(".tab-tools button:has-text('全部 Pop in')")
 
-    # 7 下載
-    with w.expect_download() as dl:
-        w.click("#exportButton")
-    f = dl.value
-    check(f.suggested_filename.endswith(".xlsx"), f"下載 Excel：{f.suggested_filename}")
+    # 主視窗重新整理、重新執行：還知道哪些分頁在外面，pop out 視窗跟著換到新的處理
+    old_run = ui.state("state.result.run_id", page=w)
+    main = ui.run_sample()
+    ui.settle(w)
+    assert ui.state("state.result.run_id", page=w) == ui.state("state.result.run_id") != old_run
+    assert main.locator(".tab.away").count() == 2
 
-    # 8 打字中不被另一邊打斷
-    w.click(".tab:has-text('結果')"); w.wait_for_timeout(300)
-    w.click("table.grid tbody tr:has-text('INV-1005')"); w.wait_for_timeout(300)
-    qty = w.locator(".field:has(label:text-is('數量')) input")
-    qty.click(); qty.fill("12")
-    pg.evaluate("act('edit',{rid:'invoice:11',column:'金額',value:'650'})"); pg.wait_for_timeout(1500)
-    check(qty.input_value() == "12", "另一個視窗更新時，正在打的字沒有被清掉")
-    check(w.evaluate("document.activeElement.closest('.field')?.querySelector('label')?.textContent") == "數量",
-          "另一個視窗更新時，游標還留在輸入框")
-    check(w.evaluate("state.result.output.rows.find(r=>r.rid==='invoice:8').values['數量']") == 10,
-          "打到一半的字沒有被自動存起來")
-    qty.press("Escape"); w.wait_for_timeout(500)
-    check(w.evaluate("state.result.output.rows.find(r=>r.rid==='invoice:11').values['金額']") == 650, "離開輸入框後套用另一個視窗的更新")
-    check(w.evaluate("state.result.output.rows.find(r=>r.rid==='invoice:8').values['數量']") == 10, "按 Esc 取消，數量沒有被改")
-
-    ui.shot("popout", page=w)
-    w.click("#popInButton"); pg.wait_for_timeout(800)
-    check(w.is_closed() and pg.evaluate("state.tab") == "rows", "Pop in：關閉並回到主視窗")
-    check(not errs, f"沒有 JS 錯誤 {errs}")
-
-    assert not failures, "\n".join(failures)
+    # Pop in：帶回篩選與選到的列，主視窗切到結果
+    w.click(".chip:has-text('全部')")
+    ui.row("INV-1003", page=w).click()
+    w.click("#popInButton")
+    main.wait_for_timeout(800)
+    assert w.is_closed()
+    assert ui.state("state.tab") == "rows" and ui.state("state.filter") == "all" and ui.state("state.selected") == "invoice:6"
+    assert main.locator("table.grid").count() == 1 and main.locator(".tab.away").count() == 1
+    # 全部 Pop in
+    main.click(".tab-tools button:has-text('全部 Pop in')")
+    main.wait_for_timeout(800)
+    assert w2.is_closed() and main.locator(".tab.away").count() == 0
+    ui.shot("popin-main")
