@@ -437,30 +437,60 @@ async function act(path, body) {
 
 /* ---------- Pop out / Pop in ---------- */
 /* Pop out 把「目前的分頁」搬到另一個瀏覽器視窗，可以拖到另一個螢幕看完整的表格。
-   搬出去的分頁在主視窗只留一行說明，不會兩邊各顯示一份；其他分頁照常在主視窗使用，
-   所以兩個螢幕可以看不同的東西（例如一邊看結果、一邊處理配對）。
+   搬出去的分頁在主視窗只留一行說明，不會兩邊各顯示一份；其他分頁照常在主視窗使用。
+   原始資料以「工作表」為單位：每張工作表都可以有自己的視窗，例如發票與報關單並排比對。
+   從別的地方看完整工作表時，預設就開在自己的視窗，不打斷正在檢查的畫面。
    每個視窗都能修改，任何一個視窗更新結果，其他視窗用 BroadcastChannel 同步。
-   從一個視窗跳到另一個視窗的分頁（例如在結果裡按「前往配對」），會交給擁有那個分頁的視窗顯示。 */
+   視窗用「key」辨識：一般分頁是分頁名稱（rows、match…），工作表是 source:工作表名稱。 */
 const pageParams = new URLSearchParams(location.search);
 const isPopout = pageParams.has("run");
 const ownTab = isPopout ? (pageParams.get("tab") || "rows") : null;
+const ownSheet = isPopout && ownTab === "source" ? pageParams.get("sheet") : null;
+const sheetKey = (sheet) => `source:${sheet}`;
+const ownKey = ownSheet ? sheetKey(ownSheet) : ownTab;
 const channel = window.BroadcastChannel ? new BroadcastChannel("dataprocessor") : null;
-const popped = new Map();   // 主視窗：分頁 → pop out 視窗（重新整理後拿不到視窗，只知道分頁在外面）
+const popped = new Map();   // key → { win }（重新整理後拿不到視窗，只知道它在外面）
 const TAB_NAMES = { rows: "結果", match: "配對", mapping: "對照表", excluded: "排除", issues: "所有警示", source: "原始資料" };
+const keyName = (key) => (key.startsWith("source:") ? `工作表「${key.slice(7)}」` : `「${TAB_NAMES[key] || key}」`);
+const winName = (key) => `dp-${encodeURIComponent(key)}`;
+
+function openWindow(key, params) {
+  const r = state.result;
+  const url = `/?run=${encodeURIComponent(r.run_id)}&${new URLSearchParams(params)}`;
+  const w = Math.min(screen.availWidth, 1600), h = Math.min(screen.availHeight, 1000);
+  const win = window.open(url, winName(key), `popup,width=${w},height=${h}`);
+  if (win) popped.set(key, { win });
+  return win;
+}
 
 function popOut() {
+  if (state.tab === "source") { popOutSheet(state.source?.sheet); return; }
   const tab = state.tab;
   const known = popped.get(tab);
   if (known && known.win && !known.win.closed) { known.win.focus(); return; }
-  const r = state.result;
-  const url = `/?run=${encodeURIComponent(r.run_id)}&tab=${encodeURIComponent(tab)}`;
-  const w = Math.min(screen.availWidth, 1600), h = Math.min(screen.availHeight, 1000);
-  const win = window.open(url, `dp-${tab}`, `popup,width=${w},height=${h}`);
-  if (!win) { toast("瀏覽器擋下了新視窗，請允許這個網站開啟彈出式視窗後再試一次", true); return; }
-  popped.set(tab, { win });
+  if (!openWindow(tab, { tab })) { toast("瀏覽器擋下了新視窗，請允許這個網站開啟彈出式視窗後再試一次", true); return; }
   const rest = tabList().find(([id]) => !popped.has(id));   // 主視窗換到還在這裡的分頁
   if (rest) { state.tab = rest[0]; state.issueFocus = null; }
   renderTabs();
+}
+
+/* 一張工作表開在自己的視窗：已經開著就交給它顯示要看的那一列，否則開新視窗 */
+function popOutSheet(sheet, place = null) {
+  if (!sheet) return false;
+  const key = sheetKey(sheet);
+  const target = { sheet, row: place?.row ?? null, col: place?.col ?? null, start: null };
+  if (popped.has(key) && key !== ownKey) {
+    channel?.postMessage({ type: "show", target: key, changes: { tab: "source", source: target } });
+    try { (popped.get(key).win || window.open("", winName(key)))?.focus(); } catch (_e) { /* 瀏覽器不讓切換焦點 */ }
+    return true;
+  }
+  if (key === ownKey) { Object.assign(state, { source: target }); renderTabs(); return true; }
+  const params = { tab: "source", sheet };
+  if (target.row) params.row = target.row;
+  if (target.col !== null && target.col !== undefined) params.col = target.col;
+  if (!openWindow(key, params)) return false;
+  if (state.result) renderTabs();
+  return true;
 }
 
 function popInAll() {
@@ -471,15 +501,15 @@ function popInAll() {
 }
 
 function popIn() {
-  channel?.postMessage({ type: "popin", tab: ownTab, run_id: state.result?.run_id, view: viewState() });
+  channel?.postMessage({ type: "popin", key: ownKey, tab: ownTab, run_id: state.result?.run_id, view: viewState() });
   window.close();
   // 不是由主視窗開的（例如重新整理過），關不掉時就回到一般畫面
   setTimeout(() => { location.href = "/"; }, 300);
 }
 
-/* Pop in 時把這個分頁的檢視狀態（篩選、搜尋、選到的列）帶回主視窗，不用重新找 */
+/* Pop in 時把這個分頁的檢視狀態（篩選、搜尋、選到的列、看到的工作表）帶回主視窗，不用重新找 */
 function viewState() {
-  const keys = ["filter", "search", "selected", "matchName", "matchFilter", "matchSearch", "matchFocus", "issueFilter", "issueFocus"];
+  const keys = ["filter", "search", "selected", "matchName", "matchFilter", "matchSearch", "matchFocus", "issueFilter", "issueFocus", "source"];
   return Object.fromEntries(keys.map((k) => [k, state[k]]));
 }
 
@@ -507,43 +537,60 @@ channel?.addEventListener("message", ({ data }) => {
     const same = state.result && state.result.run_id === data.result.run_id;
     if (same) setResult(data.result, false, true);
     else if (isPopout) setResult(data.result, true, true);   // 主視窗換了新的處理，pop out 視窗跟著換
-  } else if (data.type === "show") {
-    if (isPopout && data.target === ownTab) { Object.assign(state, data.changes, { tab: ownTab }); renderTabs(); window.focus(); }
+    return;
+  }
+  if (data.type === "show") {
+    if (isPopout && data.target === ownKey) {
+      Object.assign(state, data.changes, { tab: ownTab });
+      if (ownSheet) state.source = { ...(state.source || {}), ...(data.changes.source || {}), sheet: ownSheet };
+      renderTabs();
+      window.focus();
+    }
     if (!isPopout && data.target === "main") { goTo(data.changes); window.focus(); }
-  } else if (isPopout) {
-    if (data.type === "popin-all" || (data.type === "popin-tab" && data.tab === ownTab)) popIn();
-    if (data.type === "ping") channel.postMessage({ type: "hello", tab: ownTab });
-  } else if (data.type === "hello") {
-    if (!popped.has(data.tab)) popped.set(data.tab, { win: null });
+    return;
+  }
+  /* 每個視窗都記得哪些分頁、工作表開在外面，從哪個視窗都能把要看的東西交給對的視窗 */
+  if (data.type === "hello" && data.key !== ownKey) {
+    if (!popped.has(data.key)) popped.set(data.key, { win: null });
     if (state.result) renderTabs();
   } else if (data.type === "closed") {
-    popped.delete(data.tab);
+    popped.delete(data.key);
     if (state.result) renderTabs();
+  } else if (data.type === "ping" && isPopout) {
+    channel.postMessage({ type: "hello", key: ownKey });
+  } else if (isPopout && (data.type === "popin-all" || (data.type === "popin-tab" && data.key === ownKey))) {
+    popIn();
   } else if (data.type === "popin") {
-    popped.delete(data.tab);
-    if (state.result && data.run_id === state.result.run_id) { Object.assign(state, data.view || {}, { tab: data.tab }); renderTabs(); }
-    window.focus();
+    popped.delete(data.key);
+    if (!isPopout) {
+      if (state.result && data.run_id === state.result.run_id) { Object.assign(state, data.view || {}, { tab: data.tab }); renderTabs(); }
+      window.focus();
+    } else if (state.result) renderTabs();
   }
 });
 
-if (!isPopout) {
-  channel?.postMessage({ type: "ping" });   // 主視窗重新整理後，問問看哪些分頁還在外面
-  setInterval(() => {                         // 視窗被直接關掉、來不及通知時
-    let changed = false;
-    for (const [tab, { win }] of popped) if (win && win.closed) { popped.delete(tab); changed = true; }
-    if (changed && state.result) renderTabs();
-  }, 1500);
-}
+channel?.postMessage({ type: "ping" });   // 重新整理或剛打開時，問問看哪些分頁、工作表在外面
+setInterval(() => {                         // 視窗被直接關掉、來不及通知時
+  let changed = false;
+  for (const [key, { win }] of popped) if (win && win.closed) { popped.delete(key); changed = true; }
+  if (changed && state.result) renderTabs();
+}, 1500);
 
 async function startPopout() {
   document.body.classList.add("popout");
+  if (ownSheet) document.body.classList.add("sheet-window");   // 工作表視窗只放工作表
   $("popInButton").hidden = false;
   $("popInButton").addEventListener("click", popIn);
-  window.addEventListener("pagehide", () => channel?.postMessage({ type: "closed", tab: ownTab }));
-  channel?.postMessage({ type: "hello", tab: ownTab });
+  window.addEventListener("pagehide", () => channel?.postMessage({ type: "closed", key: ownKey }));
+  channel?.postMessage({ type: "hello", key: ownKey });
   try {
     state.tab = ownTab;
+    if (ownSheet) {
+      const col = pageParams.get("col");
+      state.source = { sheet: ownSheet, row: Number(pageParams.get("row")) || null, col: col === null ? null : Number(col), start: null };
+    }
     setResult(await api(`/api/runs/${encodeURIComponent(pageParams.get("run"))}`), true, true);
+    if (ownSheet) document.title = `${ownSheet}・原始資料`;
   } catch (error) {
     put($("empty"), el("h2", { text: "這個結果已經不在了" }),
       el("p", { class: "muted", text: "工具重新啟動過，或主視窗已經換成別的處理。請關閉這個視窗，回到主視窗重新執行。" }));
@@ -561,7 +608,7 @@ function renderPoppedNote() {
       known && known.win && !known.win.closed
         ? btn({ text: "切到那個視窗", icon: "external", variant: "default", onclick: () => known.win.focus() }) : null,
         el("button", { type: "button", class: "primary small", onclick: () => {
-        channel?.postMessage({ type: "popin-tab", tab: state.tab });
+        channel?.postMessage({ type: "popin-tab", key: state.tab });
         if (known && known.win && !known.win.closed) known.win.close();
         popped.delete(state.tab);
         renderTabs();
@@ -583,7 +630,7 @@ function setResult(result, fresh = false, remote = false) {
   pendingRemote = null;
   if (!remote) channel?.postMessage({ type: "result", result });
   state.result = result;
-  if (isPopout) document.title = `${result.recipe.name}・${result.workbook.name}`;
+  if (isPopout) document.title = ownSheet ? `${ownSheet}・原始資料` : `${result.recipe.name}・${result.workbook.name}`;
   state.traces = {};
   if (fresh) {
     state.tab = isPopout ? ownTab : result.status === "error" ? "issues" : "rows";
@@ -718,11 +765,12 @@ function renderTabs() {
   }
   if (!tabs.some((t) => t[0] === state.tab)) state.tab = tabs[0]?.[0] || "rows";
   const away = (id) => !isPopout && popped.has(id);
+const sheetsOut = [...popped.keys()].filter((k) => k.startsWith("source:")).length;
   put($("tabs"), tabs.map(([id, label, n, plain]) => el("button", {
     type: "button", class: `tab${state.tab === id ? " active" : ""}${away(id) ? " away" : ""}`,
     title: away(id) ? "在 pop out 視窗" : null,
     onclick: () => { if (!isPopout) { state.tab = id; state.issueFocus = null; renderTabs(); } },
-  }, label, away(id) ? el("span", { class: "away-mark", text: "↗" }) : null,
+  }, ownSheet ? ownSheet : label, away(id) || (id === "source" && sheetsOut && !isPopout) ? el("span", { class: "away-mark", text: "↗" }) : null,
   n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)),
   isPopout ? null : el("div", { class: "tab-tools" },
     popped.size ? btn({ text: "全部 Pop in", icon: "popin", onclick: popInAll }) : null,
@@ -1345,6 +1393,26 @@ function colLetter(index) {
   return text;
 }
 
+/* 工作表的切換：開在外面的標上 ↗ */
+function sheetChips(names, current, usedBy = () => []) {
+  return chips(names.map((name) => [name, `${name}${usedBy(name).length ? `・${usedBy(name).join("、")}` : ""}${popped.has(sheetKey(name)) ? " ↗" : ""}`]), current,
+    (name) => { state.source = { sheet: name, row: null, col: null, start: 1 }; renderSource(); });
+}
+
+/* 其他工作表也開在自己的視窗：配對時把兩張表並排比對 */
+function otherSheets(names, current) {
+  const used = new Set(Object.values(state.result.inputs).flatMap((input) => input.sheets || []));
+  const others = names.filter((n) => n !== current && used.has(n));
+  if (!others.length) return null;
+  return el("details", { class: "menu" },
+    el("summary", { class: "button ghost small" }, icon("external"), el("span", { text: "並排比對" })),
+    el("div", { class: "menu-body" },
+      el("div", { class: "menu-title", text: "把工作表開在自己的視窗" }),
+      [current, ...others].map((name) => el("button", {
+        type: "button", class: "menu-item", onclick: (e) => { e.currentTarget.closest("details").open = false; popOutSheet(name); },
+      }, icon("external"), el("span", { text: name }), popped.has(sheetKey(name)) ? el("span", { class: "muted", text: "已開" }) : null))));
+}
+
 /* 列代號（表:列 或 表:工作表:列）→ 原始 Excel 的位置 */
 function sourcePlace(rid) {
   if (!rid || !state.result) return null;
@@ -1371,8 +1439,12 @@ function openSource(place, anchor = null, compare = null) {
   peek(place, anchor, compare);
 }
 
+/* 完整工作表預設開在自己的視窗：可以和正在檢查的畫面並排，也可以每張工作表各開一個比對。
+   瀏覽器擋下彈出式視窗時，才改在這個視窗的「原始資料」分頁打開。 */
 function showSheet(place) {
   closePeek();
+  if (popOutSheet(place.sheet, place)) return;
+  toast("瀏覽器擋下了新視窗，先在這裡打開。允許這個網站開啟彈出式視窗後，完整工作表會開在自己的視窗", true);
   goTo({ tab: "source", source: { sheet: place.sheet, row: place.row, col: place.col, start: null } });
 }
 
@@ -1475,8 +1547,28 @@ const sheetCache = new Map();
 
 async function renderSource() {
   const r = state.result;
-  const firstInput = Object.values(r.inputs)[0];
+  /* 預設看主要的那張表（第一個配對的左表），沒有配對時看第一張 */
+  const firstInput = r.inputs[r.matches[0]?.left] || Object.values(r.inputs)[0];
   const src = state.source = { sheet: firstInput?.sheets?.[0] || null, row: null, col: null, start: null, ...(state.source || {}) };
+  if (ownSheet) src.sheet = ownSheet;
+  /* 主視窗：這張工作表開在外面時只留說明，不重複顯示 */
+  if (!isPopout && src.sheet && popped.has(sheetKey(src.sheet))) {
+    const names = Object.values(r.inputs).flatMap((input) => input.sheets || []);
+    put($("tabBody"), el("div", { class: "toolbar" }, sheetChips(uniq(names.concat(src.sheet)), src.sheet)),
+      el("div", { class: "popped-note" },
+        el("h3", { text: `工作表「${src.sheet}」在 pop out 視窗` }),
+        el("p", { class: "muted", text: "每張工作表都可以開在自己的視窗，並排比對。" }),
+        el("div", { class: "actions-row" },
+          btn({ text: "切到那個視窗", icon: "external", variant: "default", onclick: () => popOutSheet(src.sheet) }),
+          el("button", { type: "button", class: "primary small", onclick: () => {
+            channel?.postMessage({ type: "popin-tab", key: sheetKey(src.sheet) });
+            const known = popped.get(sheetKey(src.sheet));
+            if (known?.win && !known.win.closed) known.win.close();
+            popped.delete(sheetKey(src.sheet));
+            renderTabs();
+          } }, icon("popin"), el("span", { text: "Pop in" })))));
+    return;
+  }
   const start = src.start || Math.max(1, (src.row || 1) - 20);
   const key = `${r.run_id}\u0000${src.sheet}\u0000${start}`;
   let page = sheetCache.get(key);
@@ -1516,8 +1608,9 @@ async function renderSource() {
     })));
   put($("tabBody"),
     el("div", { class: "toolbar" },
-      chips(page.names.map((name) => [name, usedBy(name).length ? `${name}・${usedBy(name).join("、")}` : name]), page.name,
-        (name) => go({ sheet: name, row: null, col: null, start: 1 })),
+      ownSheet ? el("strong", { class: "sheet-name", text: usedBy(page.name).length ? `${page.name}・${usedBy(page.name).join("、")}` : page.name })
+        : sheetChips(page.names, page.name, usedBy),
+      otherSheets(page.names, page.name),
       el("span", { class: "spacer" }),
       jump,
       el("span", { class: "muted", text: page.total ? `第 ${page.start}–${end} 列，共 ${page.total} 列` : "空白的工作表" }),

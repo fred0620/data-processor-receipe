@@ -618,3 +618,13 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .menu-switches { display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
 .menu-switches .switch { justify-content: flex-start; width: 100%; }
 .menu-title { padding: 2px 6px 4px; font-size: 11.5px; color: var(--text); }
+.menu-item { display: flex; align-items: center; gap: 8px; width: 100%; justify-content: flex-start; min-height: 28px; padding: 0 8px;
+  background: transparent; box-shadow: none; font-size: 13px; font-weight: 400; }
+.menu-item:hover:not(:disabled) { background: var(--ink-1); }
+.menu-item .muted { margin-left: auto; font-size: 11.5px; }
+.sheet-name { font-size: 13px; }
+/* 工作表視窗：只留工作表本身，不放結果的標題、進度與按鈕 */
+body.sheet-window .result-head, body.sheet-window .progress, body.sheet-window .tabs { display: none; }
+body.sheet-window .work { padding-top: 16px; }
+/* 欄數少的工作表：列號欄維持窄寬，不被拉開 */
+.source-grid th.rowno, .source-grid th.corner { width: 48px; }
