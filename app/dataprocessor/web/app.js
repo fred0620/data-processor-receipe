@@ -106,6 +106,7 @@ const ICONS = {
   down: "M3.5 6L8 10.5 12.5 6",
   right: "M6 3.5L10.5 8 6 12.5",
   arrow: "M3 8h10M9 4l4 4-4 4",
+  swap: "M3 5.5h9.5M10 3l2.5 2.5L10 8M13 10.5H3.5M6 8l-2.5 2.5L6 13",
   columns: "M2.75 3.25h10.5v9.5H2.75zM6.25 3.25v9.5M9.75 3.25v9.5",
   wrap: "M2.75 4h10.5M2.75 8h8.25a2 2 0 0 1 0 4H8.75M10.25 10.5l-1.5 1.5 1.5 1.5M2.75 12h3.5",
   dense: "M2.75 3.5h10.5M2.75 6.5h10.5M2.75 9.5h10.5M2.75 12.5h10.5",
@@ -438,20 +439,15 @@ async function act(path, body) {
 /* ---------- Pop out / Pop in ---------- */
 /* Pop out 把「目前的分頁」搬到另一個瀏覽器視窗，可以拖到另一個螢幕看完整的表格。
    搬出去的分頁在主視窗只留一行說明，不會兩邊各顯示一份；其他分頁照常在主視窗使用。
-   原始資料以「工作表」為單位：每張工作表都可以有自己的視窗，例如發票與報關單並排比對。
-   從別的地方看完整工作表時，預設就開在自己的視窗，不打斷正在檢查的畫面。
-   每個視窗都能修改，任何一個視窗更新結果，其他視窗用 BroadcastChannel 同步。
-   視窗用「key」辨識：一般分頁是分頁名稱（rows、match…），工作表是 source:工作表名稱。 */
+   原始資料分頁搬出去後一樣能切換工作表、左右並排兩張表。
+   每個視窗都能修改，任何一個視窗更新結果，其他視窗用 BroadcastChannel 同步。視窗用分頁名稱辨識。 */
 const pageParams = new URLSearchParams(location.search);
 const isPopout = pageParams.has("run");
 const ownTab = isPopout ? (pageParams.get("tab") || "rows") : null;
-const ownSheet = isPopout && ownTab === "source" ? pageParams.get("sheet") : null;
-const sheetKey = (sheet) => `source:${sheet}`;
-const ownKey = ownSheet ? sheetKey(ownSheet) : ownTab;
+const ownKey = ownTab;
 const channel = window.BroadcastChannel ? new BroadcastChannel("dataprocessor") : null;
 const popped = new Map();   // key → { win }（重新整理後拿不到視窗，只知道它在外面）
 const TAB_NAMES = { rows: "結果", match: "配對", mapping: "對照表", excluded: "排除", issues: "所有警示", source: "原始資料" };
-const keyName = (key) => (key.startsWith("source:") ? `工作表「${key.slice(7)}」` : `「${TAB_NAMES[key] || key}」`);
 const winName = (key) => `dp-${encodeURIComponent(key)}`;
 
 function openWindow(key, params) {
@@ -463,34 +459,17 @@ function openWindow(key, params) {
   return win;
 }
 
+let handoff = null;   // 剛搬出去的分頁：新視窗準備好之後，把目前的檢視交給它
+
 function popOut() {
-  if (state.tab === "source") { popOutSheet(state.source?.sheet); return; }
   const tab = state.tab;
   const known = popped.get(tab);
   if (known && known.win && !known.win.closed) { known.win.focus(); return; }
+  handoff = { key: tab, changes: viewState() };
   if (!openWindow(tab, { tab })) { toast("瀏覽器擋下了新視窗，請允許這個網站開啟彈出式視窗後再試一次", true); return; }
   const rest = tabList().find(([id]) => !popped.has(id));   // 主視窗換到還在這裡的分頁
   if (rest) { state.tab = rest[0]; state.issueFocus = null; }
   renderTabs();
-}
-
-/* 一張工作表開在自己的視窗：已經開著就交給它顯示要看的那一列，否則開新視窗 */
-function popOutSheet(sheet, place = null) {
-  if (!sheet) return false;
-  const key = sheetKey(sheet);
-  const target = { sheet, row: place?.row ?? null, col: place?.col ?? null, start: null };
-  if (popped.has(key) && key !== ownKey) {
-    channel?.postMessage({ type: "show", target: key, changes: { tab: "source", source: target } });
-    try { (popped.get(key).win || window.open("", winName(key)))?.focus(); } catch (_e) { /* 瀏覽器不讓切換焦點 */ }
-    return true;
-  }
-  if (key === ownKey) { Object.assign(state, { source: target }); renderTabs(); return true; }
-  const params = { tab: "source", sheet };
-  if (target.row) params.row = target.row;
-  if (target.col !== null && target.col !== undefined) params.col = target.col;
-  if (!openWindow(key, params)) return false;
-  if (state.result) renderTabs();
-  return true;
 }
 
 function popInAll() {
@@ -509,7 +488,7 @@ function popIn() {
 
 /* Pop in 時把這個分頁的檢視狀態（篩選、搜尋、選到的列、看到的工作表）帶回主視窗，不用重新找 */
 function viewState() {
-  const keys = ["filter", "search", "selected", "matchName", "matchFilter", "matchSearch", "matchFocus", "issueFilter", "issueFocus", "source"];
+  const keys = ["filter", "search", "selected", "matchName", "matchFilter", "matchSearch", "matchFocus", "issueFilter", "issueFocus", "source", "source2"];
   return Object.fromEntries(keys.map((k) => [k, state[k]]));
 }
 
@@ -542,7 +521,6 @@ channel?.addEventListener("message", ({ data }) => {
   if (data.type === "show") {
     if (isPopout && data.target === ownKey) {
       Object.assign(state, data.changes, { tab: ownTab });
-      if (ownSheet) state.source = { ...(state.source || {}), ...(data.changes.source || {}), sheet: ownSheet };
       renderTabs();
       window.focus();
     }
@@ -552,6 +530,10 @@ channel?.addEventListener("message", ({ data }) => {
   /* 每個視窗都記得哪些分頁、工作表開在外面，從哪個視窗都能把要看的東西交給對的視窗 */
   if (data.type === "hello" && data.key !== ownKey) {
     if (!popped.has(data.key)) popped.set(data.key, { win: null });
+    if (handoff && handoff.key === data.key) {
+      channel.postMessage({ type: "show", target: data.key, changes: handoff.changes });
+      handoff = null;
+    }
     if (state.result) renderTabs();
   } else if (data.type === "closed") {
     popped.delete(data.key);
@@ -578,19 +560,13 @@ setInterval(() => {                         // 視窗被直接關掉、來不及
 
 async function startPopout() {
   document.body.classList.add("popout");
-  if (ownSheet) document.body.classList.add("sheet-window");   // 工作表視窗只放工作表
   $("popInButton").hidden = false;
   $("popInButton").addEventListener("click", popIn);
   window.addEventListener("pagehide", () => channel?.postMessage({ type: "closed", key: ownKey }));
-  channel?.postMessage({ type: "hello", key: ownKey });
   try {
     state.tab = ownTab;
-    if (ownSheet) {
-      const col = pageParams.get("col");
-      state.source = { sheet: ownSheet, row: Number(pageParams.get("row")) || null, col: col === null ? null : Number(col), start: null };
-    }
     setResult(await api(`/api/runs/${encodeURIComponent(pageParams.get("run"))}`), true, true);
-    if (ownSheet) document.title = `${ownSheet}・原始資料`;
+    channel?.postMessage({ type: "hello", key: ownKey });   // 結果讀好再打招呼，主視窗交過來的檢視才不會被蓋掉
   } catch (error) {
     put($("empty"), el("h2", { text: "這個結果已經不在了" }),
       el("p", { class: "muted", text: "工具重新啟動過，或主視窗已經換成別的處理。請關閉這個視窗，回到主視窗重新執行。" }));
@@ -630,10 +606,11 @@ function setResult(result, fresh = false, remote = false) {
   pendingRemote = null;
   if (!remote) channel?.postMessage({ type: "result", result });
   state.result = result;
-  if (isPopout) document.title = ownSheet ? `${ownSheet}・原始資料` : `${result.recipe.name}・${result.workbook.name}`;
+  if (isPopout) document.title = `${result.recipe.name}・${result.workbook.name}`;
   state.traces = {};
   if (fresh) {
     state.tab = isPopout ? ownTab : result.status === "error" ? "issues" : "rows";
+    state.source = null; state.source2 = null;   // 新的檔案從主要的工作表開始看
     if (!isPopout && popped.has(state.tab)) state.tab = (tabList(result).find(([id]) => !popped.has(id)) || [state.tab])[0];
     state.filter = result.counts.review ? "review" : "all";
     state.issueFilter = result.status === "error" ? "all" : "review";
@@ -765,12 +742,11 @@ function renderTabs() {
   }
   if (!tabs.some((t) => t[0] === state.tab)) state.tab = tabs[0]?.[0] || "rows";
   const away = (id) => !isPopout && popped.has(id);
-const sheetsOut = [...popped.keys()].filter((k) => k.startsWith("source:")).length;
   put($("tabs"), tabs.map(([id, label, n, plain]) => el("button", {
     type: "button", class: `tab${state.tab === id ? " active" : ""}${away(id) ? " away" : ""}`,
     title: away(id) ? "在 pop out 視窗" : null,
     onclick: () => { if (!isPopout) { state.tab = id; state.issueFocus = null; renderTabs(); } },
-  }, ownSheet ? ownSheet : label, away(id) || (id === "source" && sheetsOut && !isPopout) ? el("span", { class: "away-mark", text: "↗" }) : null,
+  }, label, away(id) ? el("span", { class: "away-mark", text: "↗" }) : null,
   n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)),
   isPopout ? null : el("div", { class: "tab-tools" },
     popped.size ? btn({ text: "全部 Pop in", icon: "popin", onclick: popInAll }) : null,
@@ -1154,8 +1130,9 @@ function valuesList(values, columns, compare) {
 }
 
 /* 一列的辨識資訊：辨識欄位（例如發票號碼）加上 Excel 列號，讓人分得出是哪一筆 */
-function rowTitle(record, titleColumns, rid = null) {
+function rowTitle(record, titleColumns, rid = null, partner = null) {
   const place = rid ? sourcePlace(rid) : null;
+  if (place && partner) place.partner = sourcePlace(partner);   // 配對的另一邊：完整工作表時並排
   const link = place ? btn({ icon: "sheet", variant: "quiet", label: `看原始資料：${place.sheet} 第 ${place.row} 列`,
     extra: "row-source", onclick: (e) => openSource(place, e.currentTarget) }) : null;
   const title = rowTitleText(record, titleColumns);
@@ -1255,7 +1232,7 @@ function matchCard(match, row) {
     side = el("div", { class: "candidates" }, candidates.map((target, i) => {
       const cand = row.candidates[i];
       return el("div", { class: "candidate" },
-        el("div", { class: "candidate-head" }, rowTitle(target, match.right_title, cand.rid),
+        el("div", { class: "candidate-head" }, rowTitle(target, match.right_title, cand.rid, row.left),
           cand.score !== null && cand.score !== undefined ? el("span", { class: "muted", text: `相似度 ${Number(cand.score).toFixed(2)}` }) : null,
           el("span", { class: "spacer" }),
           btn({ text: "選這筆", icon: "check", variant: "default", onclick: () => decide(match.multi ? [...row.rights, cand.rid] : [cand.rid]) })),
@@ -1263,7 +1240,7 @@ function matchCard(match, row) {
     }));
   } else if (row.rights.length === 1 && !match.multi) {
     const target = match.right_rows[row.rights[0]];
-    side = el("div", {}, el("div", { class: "side-title" }, rowTitle(target, match.right_title, row.rights[0])), valuesList(target.values, rightColumns, left.values));
+    side = el("div", {}, el("div", { class: "side-title" }, rowTitle(target, match.right_title, row.rights[0], row.left)), valuesList(target.values, rightColumns, left.values));
   } else if (row.rights.length) {
     side = el("div", { class: "picker-list" }, row.rights.map((rid) => {
       const target = match.right_rows[rid];
@@ -1281,7 +1258,7 @@ function matchCard(match, row) {
       el("span", { class: "how", text: how }),
       el("span", { class: "spacer" }), actions),
     el("div", { class: "match-body" },
-      el("div", { class: "side" }, el("h4", { text: match.left_label }), el("div", { class: "side-title" }, rowTitle(left, match.left_title, row.left)),
+      el("div", { class: "side" }, el("h4", { text: match.left_label }), el("div", { class: "side-title" }, rowTitle(left, match.left_title, row.left, row.rights[0] || null)),
         valuesList(left.values, leftColumns)),
       el("div", { class: "side" }, el("h4", { text: match.right_label + (match.multi && row.rights.length ? `・${row.rights.length} 筆` : "") }), side,
         state.pickerFor === row.left ? picker(match, row, rightColumns, decide) : null)),
@@ -1393,26 +1370,6 @@ function colLetter(index) {
   return text;
 }
 
-/* 工作表的切換：開在外面的標上 ↗ */
-function sheetChips(names, current, usedBy = () => []) {
-  return chips(names.map((name) => [name, `${name}${usedBy(name).length ? `・${usedBy(name).join("、")}` : ""}${popped.has(sheetKey(name)) ? " ↗" : ""}`]), current,
-    (name) => { state.source = { sheet: name, row: null, col: null, start: 1 }; renderSource(); });
-}
-
-/* 其他工作表也開在自己的視窗：配對時把兩張表並排比對 */
-function otherSheets(names, current) {
-  const used = new Set(Object.values(state.result.inputs).flatMap((input) => input.sheets || []));
-  const others = names.filter((n) => n !== current && used.has(n));
-  if (!others.length) return null;
-  return el("details", { class: "menu" },
-    el("summary", { class: "button ghost small" }, icon("external"), el("span", { text: "並排比對" })),
-    el("div", { class: "menu-body" },
-      el("div", { class: "menu-title", text: "把工作表開在自己的視窗" }),
-      [current, ...others].map((name) => el("button", {
-        type: "button", class: "menu-item", onclick: (e) => { e.currentTarget.closest("details").open = false; popOutSheet(name); },
-      }, icon("external"), el("span", { text: name }), popped.has(sheetKey(name)) ? el("span", { class: "muted", text: "已開" }) : null))));
-}
-
 /* 列代號（表:列 或 表:工作表:列）→ 原始 Excel 的位置 */
 function sourcePlace(rid) {
   if (!rid || !state.result) return null;
@@ -1439,13 +1396,46 @@ function openSource(place, anchor = null, compare = null) {
   peek(place, anchor, compare);
 }
 
-/* 完整工作表預設開在自己的視窗：可以和正在檢查的畫面並排，也可以每張工作表各開一個比對。
-   瀏覽器擋下彈出式視窗時，才改在這個視窗的「原始資料」分頁打開。 */
+/* 完整工作表：打開「原始資料」分頁（分頁 pop out 時交給那個視窗）。
+   這一列配對到另一張工作表時，左右並排兩張表，各自標出對應的那一列，配對可以直接對照。
+   左邊固定放這一列自己的表，右邊放配對到的表。 */
 function showSheet(place) {
   closePeek();
-  if (popOutSheet(place.sheet, place)) return;
-  toast("瀏覽器擋下了新視窗，先在這裡打開。允許這個網站開啟彈出式視窗後，完整工作表會開在自己的視窗", true);
-  goTo({ tab: "source", source: { sheet: place.sheet, row: place.row, col: place.col, start: null } });
+  const spot = { sheet: place.sheet, row: place.row, col: place.col ?? null, start: null };
+  const partner = place.partner && place.partner.sheet !== place.sheet ? place.partner : null;
+  const lefts = new Set(state.result.matches.map((m) => m.left));
+  const other = partner   // 配對卡片：另一邊就是配對的那一列，配對的左表放左邊
+    ? { sheet: partner.sheet, row: partner.row, col: null, start: null, own: lefts.has(partner.table) && !lefts.has(place.table) }
+    : counterpart(place);
+  const changes = { tab: "source", source: spot };
+  if (other) changes.source2 = other;
+  if (other && other.own) { changes.source = other; changes.source2 = spot; delete other.own; }
+  goTo(changes);
+}
+
+/* 選到的列在另一張工作表上的對應位置：這一列自己的來源或配對到的列 */
+function counterpart(place) {
+  const r = state.result;
+  const row = r.output.rows.find((x) => x.rid === state.selected);
+  if (!row) return null;
+  const own = sourcePlace(row.source);
+  const places = [own, ...Object.values(row.links || {}).map(sourcePlace)].filter(Boolean);
+  /* 打開的是別的列（例如排除的列）時，不拿選到的列來配 */
+  if (place.row && !places.some((p) => p.sheet === place.sheet && p.row === place.row)) return null;
+  const other = places.find((p) => p.sheet !== place.sheet);
+  if (!other) return null;
+  return { sheet: other.sheet, row: other.row, col: null, start: null, own: other === own };
+}
+
+/* 打開並排時右邊預設的工作表：選到的列配對到的那一列，否則第一個配對的另一張表 */
+function defaultRight(left) {
+  const r = state.result;
+  const found = counterpart({ sheet: left.sheet });
+  if (found) { delete found.own; return found; }
+  const used = uniq([r.inputs[r.matches[0]?.right], r.inputs[r.matches[0]?.left], ...Object.values(r.inputs)]
+    .filter(Boolean).flatMap((input) => input.sheets || []));
+  const sheet = used.find((name) => name !== left.sheet);
+  return sheet ? { sheet, row: null, col: null, start: null } : null;
 }
 
 /* 一次讀 200 列，對齊成固定的區段，小卡與完整工作表共用 */
@@ -1545,42 +1535,50 @@ window.addEventListener("resize", closePeek);
 
 const sheetCache = new Map();
 
+/* 一段工作表（小卡讀過的段落直接用） */
+async function sheetPage(r, src) {
+  const start = src.start || Math.max(1, (src.row || 1) - 20);
+  const key = `${r.run_id}\u0000${src.sheet}\u0000${start}`;
+  let page = sheetCache.get(key);
+  if (page && typeof page.then === "function") page = await page.catch(() => null);
+  if (!page) {
+    page = await api(`/api/runs/${encodeURIComponent(r.run_id)}/sheet?name=${encodeURIComponent(src.sheet || "")}&start=${start}`);
+    sheetCache.set(key, page);
+  }
+  return page;
+}
+
+/* 原始資料分頁：照 Excel 的欄名與列號顯示工作表。可以左右並排兩張表，各自切換工作表、跳列、翻頁，
+   配對時把兩邊對應的列放在一起比對。 */
 async function renderSource() {
   const r = state.result;
   /* 預設看主要的那張表（第一個配對的左表），沒有配對時看第一張 */
   const firstInput = r.inputs[r.matches[0]?.left] || Object.values(r.inputs)[0];
-  const src = state.source = { sheet: firstInput?.sheets?.[0] || null, row: null, col: null, start: null, ...(state.source || {}) };
-  if (ownSheet) src.sheet = ownSheet;
-  /* 主視窗：這張工作表開在外面時只留說明，不重複顯示 */
-  if (!isPopout && src.sheet && popped.has(sheetKey(src.sheet))) {
-    const names = Object.values(r.inputs).flatMap((input) => input.sheets || []);
-    put($("tabBody"), el("div", { class: "toolbar" }, sheetChips(uniq(names.concat(src.sheet)), src.sheet)),
-      el("div", { class: "popped-note" },
-        el("h3", { text: `工作表「${src.sheet}」在 pop out 視窗` }),
-        el("p", { class: "muted", text: "每張工作表都可以開在自己的視窗，並排比對。" }),
-        el("div", { class: "actions-row" },
-          btn({ text: "切到那個視窗", icon: "external", variant: "default", onclick: () => popOutSheet(src.sheet) }),
-          el("button", { type: "button", class: "primary small", onclick: () => {
-            channel?.postMessage({ type: "popin-tab", key: sheetKey(src.sheet) });
-            const known = popped.get(sheetKey(src.sheet));
-            if (known?.win && !known.win.closed) known.win.close();
-            popped.delete(sheetKey(src.sheet));
-            renderTabs();
-          } }, icon("popin"), el("span", { text: "Pop in" })))));
-    return;
-  }
-  const start = src.start || Math.max(1, (src.row || 1) - 20);
-  const key = `${r.run_id}\u0000${src.sheet}\u0000${start}`;
-  let page = sheetCache.get(key);
-  if (page && typeof page.then === "function") page = await page.catch(() => null);   // 小卡讀過的段落
-  if (!page) {
-    put($("tabBody"), el("div", { class: "note", text: "讀取原始資料…" }));
-    try {
-      page = await api(`/api/runs/${encodeURIComponent(r.run_id)}/sheet?name=${encodeURIComponent(src.sheet || "")}&start=${start}`);
-    } catch (error) { put($("tabBody"), el("div", { class: "note", text: error.message })); return; }
-    sheetCache.set(key, page);
-    if (state.tab !== "source" || state.result !== r) return;   // 讀取時已經換到別的分頁
-  }
+  state.source = { sheet: firstInput?.sheets?.[0] || null, row: null, col: null, start: null, ...(state.source || {}) };
+  const panes = state.source2 ? [state.source, state.source2] : [state.source];
+  const body = $("tabBody");
+  if (!body.querySelector(".source-pane")) put(body, el("div", { class: "note", text: "讀取原始資料…" }));
+  let pages;
+  try { pages = await Promise.all(panes.map((src) => sheetPage(r, src))); }
+  catch (error) { put(body, el("div", { class: "note", text: error.message })); return; }
+  if (state.tab !== "source" || state.result !== r) return;   // 讀取時已經換到別的分頁
+  const split = panes.length > 1;
+  const setSplit = (on) => { state.source2 = on ? defaultRight(state.source) : null; renderSource(); };
+  put(body,
+    el("div", { class: "toolbar source-top" },
+      toggle("左右並排", split, setSplit, "把兩張工作表放在左右兩邊比對，例如發票明細和報關單"),
+      split ? btn({ text: "左右交換", icon: "swap", onclick: () => { [state.source, state.source2] = [state.source2, state.source]; renderSource(); } }) : null),
+    el("div", { class: `source-split${split ? " two" : ""}` },
+      panes.map((src, i) => sourcePane(r, src, pages[i], split ? (i ? "右" : "左") : null))));
+  body.querySelectorAll(".source-pane").forEach((pane, i) => {
+    const focus = pane.querySelector(".src-cell") || pane.querySelector(".src-target");
+    if (!focus) return;
+    requestAnimationFrame(() => scrollToCell(focus, i === 0));
+    keepAligned(pane.querySelector(".source-wrap"), focus);
+  });
+}
+
+function sourcePane(r, src, page, side) {
   src.sheet = page.name;
   const headers = Object.values(r.inputs).flatMap((input) => {
     const pos = input.positions?.[page.name];
@@ -1589,7 +1587,8 @@ async function renderSource() {
   const usedBy = (name) => Object.values(r.inputs).filter((input) => (input.sheets || []).includes(name)).map((input) => input.label);
   const end = page.start + page.rows.length - 1;
   const go = (changes) => { Object.assign(src, changes); renderSource(); };
-  const jump = el("input", { class: "search jump", type: "number", min: 1, max: page.total, placeholder: "跳到第幾列" });
+  const jump = el("input", { class: "search jump", type: "number", min: 1, max: page.total, placeholder: "跳到第幾列",
+    "aria-label": side ? `${side}邊跳到第幾列` : "跳到第幾列" });
   jump.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && Number(jump.value) >= 1) go({ row: Number(jump.value), col: null, start: null });
   });
@@ -1606,22 +1605,50 @@ async function renderSource() {
         cells.map((value, i) => el("td", { class: target && i === src.col ? "src-cell" : null, title: value || null },
           el("div", { class: "cell-text", text: value }))));
     })));
-  put($("tabBody"),
+  /* 並排時工作表用下拉選單，兩邊的工具列才放得下；只有一張時用標籤 */
+  const label = (name) => (usedBy(name).length ? `${name}・${usedBy(name).join("、")}` : name);
+  const pick = (name) => go({ sheet: name, row: null, col: null, start: 1 });
+  const picker = side
+    ? (() => {
+      const select = el("select", { class: "sheet-select", "aria-label": `${side}邊的工作表` },
+        page.names.map((name) => el("option", { value: name, text: label(name), selected: name === page.name })));
+      select.addEventListener("change", () => pick(select.value));
+      return select;
+    })()
+    : chips(page.names.map((name) => [name, label(name)]), page.name, pick);
+  return el("section", { class: "source-pane", dataset: { side: side || "" } },
     el("div", { class: "toolbar" },
-      ownSheet ? el("strong", { class: "sheet-name", text: usedBy(page.name).length ? `${page.name}・${usedBy(page.name).join("、")}` : page.name })
-        : sheetChips(page.names, page.name, usedBy),
-      otherSheets(page.names, page.name),
+      picker,
       el("span", { class: "spacer" }),
       jump,
-      el("span", { class: "muted", text: page.total ? `第 ${page.start}–${end} 列，共 ${page.total} 列` : "空白的工作表" }),
+      el("span", { class: "muted range", text: page.total ? `${page.start}–${end}／${page.total} 列` : "空白的工作表" }),
       btn({ icon: "left", label: "上一段", disabled: page.start <= 1, onclick: () => go({ start: Math.max(1, page.start - page.page) }) }),
-      btn({ icon: "right", label: "下一段", disabled: end >= page.total, onclick: () => go({ start: page.start + page.page }) })),
+      btn({ icon: "right", label: "下一段", disabled: end >= page.total, onclick: () => go({ start: page.start + page.page }) }),
+      side === "右" ? btn({ icon: "x", label: "關掉右邊", onclick: () => { state.source2 = null; renderSource(); } }) : null),
     headers.length || src.row ? el("p", { class: "muted small-text source-legend" },
       headers.map((h) => `第 ${h.row} 列是「${h.label}」的表頭`).join("，"),
       src.row ? `${headers.length ? "；" : ""}標示的是第 ${src.row} 列${src.col !== null && src.col !== undefined ? `的 ${colLetter(src.col)}${src.row}` : ""}` : "") : null,
     page.rows.length ? el("div", { class: "table-wrap source-wrap" }, table) : el("div", { class: "note", text: "這張工作表沒有資料。" }));
-  const focus = $("tabBody").querySelector(".src-cell") || $("tabBody").querySelector(".src-target");
-  if (focus) requestAnimationFrame(() => scrollToCell(focus));
+}
+
+/* 版面或字型改變時（細節打開、並排、拖曳寬度、新視窗的字型晚到），欄寬會跟著變，重新對齊要看的格子；使用者自己捲過就不再動 */
+function keepAligned(wrap, focus) {
+  if (!wrap || !window.ResizeObserver) return;
+  let moved = false;
+  const stop = () => { moved = true; };
+  ["wheel", "pointerdown", "keydown"].forEach((type) => wrap.addEventListener(type, stop, { once: true, passive: true }));
+  const table = wrap.querySelector("table");
+  const size = () => `${wrap.clientWidth}x${table.offsetWidth}`;
+  let last = size();
+  const again = () => {
+    if (moved || !focus.isConnected || size() === last) return;
+    last = size();
+    scrollToCell(focus, false);
+  };
+  const watch = new ResizeObserver(again);
+  watch.observe(wrap);
+  watch.observe(table);
+  document.fonts?.ready.then(() => requestAnimationFrame(() => { last = ""; again(); }));   // 新視窗的字型晚到，欄寬會變
 }
 
 /* 捲到要看的那一列（置中）與那一格。左右捲動時對齊到欄的開頭，左邊的欄位不會被切一半 */
@@ -1637,9 +1664,11 @@ function scrollToCell(cell, page = true) {
   const rowno = heads[0].getBoundingClientRect().width;
   const right = at(cell) + rect.width;
   let left = 0;
-  if (cell.tagName === "TD" && right > wrap.clientWidth) {
-    const fit = heads.slice(1).find((th) => right - (at(th) - rowno) <= wrap.clientWidth);
-    left = at(fit || cell) - rowno;
+  if (cell.tagName === "TD" && right > wrap.clientWidth + 1) {
+    /* 只從捲得到的欄挑：格子在最右邊時，捲到底也對不齊後面的欄。容許 1px 的小數誤差 */
+    const max = wrap.scrollWidth - wrap.clientWidth;
+    const starts = heads.slice(1).map((th) => at(th) - rowno).filter((x) => x <= max + 1);
+    left = starts.find((x) => right - x <= wrap.clientWidth + 1) ?? starts[starts.length - 1] ?? 0;
   }
   wrap.scrollLeft = left;
   if (page) wrap.scrollIntoView({ block: "nearest" });

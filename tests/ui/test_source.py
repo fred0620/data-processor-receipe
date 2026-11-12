@@ -1,6 +1,8 @@
 """原始資料：回到上傳的 Excel 核對。從細節、欄位、配對卡片、排除的列都能跳到原本的那一列或那一格。"""
 from __future__ import annotations
 
+from playwright.sync_api import expect
+
 
 def _target_row(scope):
     return int(scope.locator(".source-grid tr.src-target th.rowno").inner_text())
@@ -37,86 +39,107 @@ def test_peek_original_cell_beside_the_row(ui):
     assert card.count() == 0
 
 
-def _open_full_sheet(ui, page):
-    """從小卡打開完整工作表：預設開在自己的視窗。"""
-    with ui.context.expect_page() as info:
-        page.locator("#peek button:has-text('完整工作表')").click()
-    w = ui.watch(info.value, "sheet")
-    w.wait_for_selector(".source-grid tr.src-target")
-    return w
+def _assert_snapped(page, side=None):
+    """要看的格子完整看得到；有左右捲動時，列號右邊緊接著一欄的開頭，不能切到半欄。"""
+    scope = f".tab-body .source-pane[data-side='{side}']" if side else ".tab-body .source-pane"
+    page.wait_for_timeout(400)
+    view = page.evaluate("""(scope) => {
+      const wrap = document.querySelector(scope + ' .source-wrap');
+      const edge = wrap.querySelector('tbody th.rowno').getBoundingClientRect().right;
+      const lefts = [...wrap.querySelectorAll('thead th')].slice(1).map((th) => th.getBoundingClientRect().left);
+      const cell = wrap.querySelector('td.src-cell').getBoundingClientRect();
+      return { scroll: wrap.scrollLeft, edge, lefts, cellRight: cell.right, wrapRight: wrap.getBoundingClientRect().right };
+    }""", scope)
+    assert view["cellRight"] <= view["wrapRight"] + 1, "要看的格子要完整看得到"
+    if view["scroll"] > 0:
+        assert any(abs(left - view["edge"]) <= 1 for left in view["lefts"]), view
 
 
-def test_full_sheet_opens_in_its_own_window(ui):
+def _pane(page, side):
+    return page.locator(f".tab-body .source-pane[data-side='{side}']")
+
+
+def _open_full_sheet(page):
+    """從小卡打開完整工作表：在這個視窗的原始資料分頁。"""
+    page.locator("#peek button:has-text('完整工作表')").click()
+    page.wait_for_selector(".tab-body .source-grid tr.src-target")
+
+
+def test_full_sheet_splits_with_matched_sheet(ui):
+    """完整工作表在同一個視窗打開；這一列有配對時左右並排，兩邊都標出對應的那一列。"""
     page = ui.run_sample()
     ui.row("INV-1003").click()
     ui.field("金額").hover()
     ui.field("金額").locator("button.cell-link").click()
-    w = _open_full_sheet(ui, page)
-    assert ui.state("state.tab") == "rows" and page.is_visible("#drawer"), "主視窗留在正在檢查的列"
-    assert page.locator("#peek").count() == 0
-    assert w.locator(".source-grid td.src-cell").inner_text() == "2,000"
-    assert w.locator(".source-grid thead th.target-col").inner_text() == "E"
-    assert "第 3 列是「發票」的表頭" in w.inner_text(".source-legend")
-    assert w.title().startswith("發票明細") and "發票明細" in w.inner_text(".tab-body .toolbar")
-    assert not w.is_visible(".result-head") and not w.is_visible("#progress"), "工作表視窗只放工作表"
-    # 主視窗的原始資料分頁：這張工作表在外面，只留說明
-    page.click(".tab:has-text('原始資料')")
-    assert page.is_visible(".popped-note:has-text('發票明細')") and page.locator(".tab-body .source-grid").count() == 0
-    # 再看同一張表的另一格：交給已經開著的視窗，不會多開
+    _open_full_sheet(page)
+    assert len(ui.context.pages) == 1, "不開新視窗"
+    assert ui.state("state.tab") == "source" and page.is_visible("#drawer"), "細節留著，可以邊看邊改"
+    left, right = _pane(page, "左"), _pane(page, "右")
+    assert left.locator("select.sheet-select").input_value() == "發票明細"
+    assert right.locator("select.sheet-select").input_value() == "報關單"
+    assert left.locator("td.src-cell").inner_text() == "2,000"
+    assert left.locator("thead th.target-col").inner_text() == "E"
+    assert _target_row(left) == 6 and _target_row(right) == ui.state(
+        "Number(Object.values(state.result.output.rows.find(r => r.rid === 'invoice:6').links).find(v => v.startsWith('declaration')).split(':').pop())")
+    assert "第 3 列是「發票」的表頭" in left.locator(".source-legend").inner_text()
+    _assert_snapped(page, "左")
+    for side in (left, right):   # 窄的時候工作表選單也要看得到名稱
+        assert side.locator("select.sheet-select").bounding_box()["width"] >= 130
+    # 兩邊並排，各自捲動
+    lb, rb = left.bounding_box(), right.bounding_box()
+    assert abs(lb["y"] - rb["y"]) < 2 and lb["x"] + lb["width"] <= rb["x"]
+    ui.shot("source-split")
+    # 從報關單那一列打開：報關單仍然放右邊，發票明細放左邊
     page.click(".tab:has-text('結果')")
-    ui.row("INV-1005").click()
-    ui.field("金額").hover()
-    ui.field("金額").locator("button.cell-link").click()
-    page.locator("#peek button:has-text('完整工作表')").click()
-    w.locator(".source-grid tr.src-target th.rowno:text-is('8')").wait_for()
-    assert len(ui.context.pages) == 2
-    ui.shot("sheet-window", page=w)
+    ui.row("INV-1003").click()
+    section = page.locator("#drawer section:has(h4:text-is('原始 Excel'))")
+    section.locator("button:has-text('報關單')").first.click()
+    _open_full_sheet(page)
+    assert left.locator("select.sheet-select").input_value() == "發票明細" and _target_row(left) == 6
+    assert right.locator("select.sheet-select").input_value() == "報關單"
 
 
-def test_compare_two_sheets_side_by_side(ui):
-    """配對時把發票與報關單各開一個視窗並排比對，兩個視窗各自跟著要看的那一列。"""
+def test_split_panes_switch_jump_and_close(ui):
+    """左右兩邊各自切換工作表、跳列、翻頁；可以交換、關掉右邊。"""
+    page = ui.run_sample()
+    page.click(".tab:has-text('原始資料')")
+    page.wait_for_selector(".source-grid")
+    assert page.locator(".tab-body .source-pane").count() == 1
+    page.click(".tab-body [role=switch]:has-text('左右並排')")
+    page.wait_for_selector(".tab-body .source-pane[data-side='右'] .source-grid")
+    left, right = _pane(page, "左"), _pane(page, "右")
+    assert left.locator("select.sheet-select").input_value() == "發票明細"
+    assert right.locator("select.sheet-select").input_value() == "報關單"
+    right.locator("select.sheet-select").select_option("匯率")
+    expect(right.locator(".range")).to_contain_text("／4 列")   # 匯率表有 4 列
+    assert left.locator("select.sheet-select").input_value() == "發票明細", "換右邊不影響左邊"
+    left.locator("input.jump").fill("10")
+    left.locator("input.jump").press("Enter")
+    ui.settle()
+    assert _target_row(left) == 10 and right.locator("tr.src-target").count() == 0
+    page.click(".tab-body button:has-text('左右交換')")
+    ui.settle()
+    assert left.locator("select.sheet-select").input_value() == "匯率"
+    assert right.locator("select.sheet-select").input_value() == "發票明細" and _target_row(right) == 10
+    right.locator("button[aria-label='關掉右邊']").click()
+    ui.settle()
+    assert page.locator(".tab-body .source-pane").count() == 1
+    assert page.locator(".tab-body .toolbar .chips .chip.active").first.inner_text().startswith("匯率")
+
+
+def test_compare_match_sides(ui):
+    """配對卡片的發票與報關單：打開完整工作表就是兩張表並排，換一筆配對兩邊一起跳。"""
     page = ui.run_sample()
     page.click(".tab:has-text('配對')")
     page.click(".chip:has-text('全部 9')")
-    card = page.locator(".match-card:has-text('INV-1001')").first
-    card.locator(".side").nth(0).locator("button.row-source").click()      # 發票那一列
-    invoice = _open_full_sheet(ui, page)
-    card.locator(".side").nth(1).locator("button.row-source").click()      # 報關單那一列
-    declaration = _open_full_sheet(ui, page)
-    assert invoice.title().startswith("發票明細") and declaration.title().startswith("報關單")
-    assert _target_row(invoice) == 4 and _target_row(declaration) == 2
-    # 換另一筆配對：兩個視窗都跳到新的那一列，不會多開
     card = page.locator(".match-card:has-text('INV1002')").first
-    card.locator(".side").nth(0).locator("button.row-source").click()
-    page.locator("#peek button:has-text('完整工作表')").click()
-    invoice.locator(".source-grid tr.src-target th.rowno:text-is('5')").wait_for()
-    card.locator(".side").nth(1).locator("button.row-source").click()
-    page.locator("#peek button:has-text('完整工作表')").click()
-    declaration.locator(".source-grid tr.src-target th.rowno:text-is('3')").wait_for()
-    assert len(ui.context.pages) == 3
-    # 從工作表視窗也能把另一張表開出來
-    invoice.click("summary:has-text('並排比對')")
-    with ui.context.expect_page() as info:
-        invoice.click(".menu-item:has-text('匯率')")
-    rates = ui.watch(info.value, "rates")
-    rates.wait_for_selector(".source-grid")
-    assert rates.title().startswith("匯率")
-    rowno = rates.locator(".source-grid tbody th.rowno").first.bounding_box()["width"]
-    assert rowno <= 60, f"欄數少的工作表，列號欄不能被拉寬（{rowno}px）"
-    # 主視窗的原始資料分頁標出哪些工作表在外面
-    page.click(".tab:has-text('原始資料')")
-    labels = page.locator(".tab-body .toolbar .chips").first.inner_text()
-    assert labels.count("↗") == 3
-    # Pop in：工作表回到主視窗，帶回看到的那一列
-    invoice.click("#popInButton")
-    page.wait_for_timeout(800)
-    assert invoice.is_closed()
-    assert ui.state("state.tab") == "source" and ui.state("state.source.sheet") == "發票明細"
-    assert _target_row(page.locator(".tab-body")) == 5
-    page.click(".tab-tools button:has-text('全部 Pop in')")
-    page.wait_for_timeout(800)
-    assert declaration.is_closed() and rates.is_closed()
-    ui.shot("compare-sheets", page=page)
+    card.locator(".side").nth(1).locator("button.row-source").click()      # 報關單那一列
+    _open_full_sheet(page)
+    left, right = _pane(page, "左"), _pane(page, "右")
+    assert ui.state("state.tab") == "source"
+    assert right.locator("select.sheet-select").input_value() == "報關單" and _target_row(right) == 3
+    assert left.locator("select.sheet-select").input_value() == "發票明細" and _target_row(left) == 5
+    ui.shot("compare-sheets")
 
 
 def test_sheet_switch_jump_and_paging(ui):
@@ -125,16 +148,15 @@ def test_sheet_switch_jump_and_paging(ui):
     page.wait_for_selector(".source-grid")
     chips = page.locator(".tab-body .toolbar .chips").first.locator(".chip")
     assert chips.count() == 3 and "發票" in chips.first.inner_text()
+    second = chips.nth(1).inner_text()
     chips.nth(1).click()
-    page.wait_for_selector(".source-grid")
-    assert page.locator(".tab-body .toolbar .chips").first.locator(".chip.active").inner_text() == chips.nth(1).inner_text()
+    expect(page.locator(".tab-body .toolbar .chips .chip.active")).to_have_text(second)   # 等重畫完，不讀到舊的表
     assert page.is_disabled("button[aria-label='上一段']") and page.is_disabled("button[aria-label='下一段']")
     chips.first.click()
-    page.wait_for_selector(".source-grid")
+    expect(page.locator(".tab-body .toolbar .chips .chip.active")).to_contain_text("發票")
     page.fill("input.jump", "10")
     page.press("input.jump", "Enter")
-    ui.settle()
-    assert _target_row(page) == 10
+    expect(page.locator(".tab-body tr.src-target th.rowno")).to_have_text("10")
 
 
 def test_peek_from_match_card_and_excluded(ui):
@@ -153,23 +175,42 @@ def test_peek_from_match_card_and_excluded(ui):
     assert _target_row(peek) == ui.state("state.result.excluded[0].row") and ui.state("state.tab") == "excluded"
 
 
-def test_full_sheet_in_pop_out_window(ui):
-    """原始資料 pop out 到另一個螢幕：小卡的「完整工作表」交給那個視窗顯示。"""
+def test_source_pop_out_keeps_switching(ui):
+    """原始資料 pop out 後一樣能切換工作表、左右並排；小卡的「完整工作表」交給那個視窗。"""
     page = ui.run_sample()
     page.click(".tab:has-text('原始資料')")
     page.wait_for_selector(".source-grid")
+    page.click(".tab-body [role=switch]:has-text('左右並排')")
+    page.wait_for_selector(".tab-body .source-pane[data-side='右'] .source-grid")
     with ui.context.expect_page() as info:
         page.click(".tab-tools button:has-text('Pop out')")
     w = ui.watch(info.value, "pop")
-    w.wait_for_selector(".source-grid")
+    w.wait_for_selector(".tab-body .source-pane[data-side='右'] .source-grid")   # 帶著並排過去
+    _pane(w, "右").locator("select.sheet-select").select_option("匯率")
+    _pane(w, "右").locator(".source-grid").wait_for()
+    w.wait_for_timeout(300)
+    assert _pane(w, "右").locator("select.sheet-select").input_value() == "匯率", "pop out 後可以換工作表"
+    w.click(".tab-body [role=switch]:has-text('左右並排')")
+    w.wait_for_selector(".tab-body .toolbar .chips")
+    w.locator(".tab-body .toolbar .chips .chip").nth(1).click()
+    w.wait_for_timeout(300)
+    assert w.locator(".tab-body .toolbar .chips .chip.active").inner_text().startswith("報關單")
+    # 主視窗的完整工作表交給 pop out 視窗，主視窗留在正在檢查的列
     page.click(".tab:has-text('結果')")
     ui.row("INV-1003").click()
     ui.field("金額").hover()
     ui.field("金額").locator("button.cell-link").click()
     page.locator("#peek button:has-text('完整工作表')").click()
-    w.wait_for_selector(".source-grid td.src-cell")
-    assert w.locator(".source-grid td.src-cell").inner_text() == "2,000"
+    w.wait_for_selector(".source-pane[data-side='左'] td.src-cell")
+    assert _pane(w, "左").locator("td.src-cell").inner_text() == "2,000"
+    _assert_snapped(w, "左")
     assert ui.state("state.tab") == "rows" and page.is_visible("#drawer")
+    assert len(ui.context.pages) == 2
+    ui.shot("source-popout", page=w)
+    # Pop in：帶回並排與看到的列
+    w.click("#popInButton")
+    page.wait_for_timeout(800)
+    assert ui.state("state.tab") == "source" and page.locator(".tab-body .source-pane").count() == 2
 
 
 def test_horizontal_scroll_snaps_to_column(ui):
@@ -179,17 +220,7 @@ def test_horizontal_scroll_snaps_to_column(ui):
     ui.row("INV-1003").click()
     ui.field("金額").hover()
     ui.field("金額").locator("button.cell-link").click()
-    w = _open_full_sheet(ui, page)
-    page = w
+    _open_full_sheet(page)
     page.wait_for_timeout(300)
-    view = page.evaluate("""() => {
-      const wrap = document.querySelector('.tab-body .source-wrap');
-      const edge = wrap.querySelector('tbody th.rowno').getBoundingClientRect().right;
-      const lefts = [...wrap.querySelectorAll('thead th')].slice(1).map((th) => th.getBoundingClientRect().left);
-      const cell = wrap.querySelector('td.src-cell').getBoundingClientRect();
-      return { scroll: wrap.scrollLeft, edge, lefts, cellRight: cell.right, wrapRight: wrap.getBoundingClientRect().right };
-    }""")
-    assert view["cellRight"] <= view["wrapRight"] + 1, "要看的格子要完整看得到"
-    if view["scroll"] > 0:   # 有左右捲動時，列號右邊緊接著的必須是一欄的開頭，不能切到半欄
-        assert any(abs(left - view["edge"]) <= 1 for left in view["lefts"]), view
+    _assert_snapped(page)
     ui.shot("source-snap")

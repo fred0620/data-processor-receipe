@@ -216,23 +216,21 @@ button .icon, .button .icon { width: 14px; height: 14px; flex: none; fill: none;
 .actions { display: flex; gap: 8px; }
 
 /* ---------- 流程：卡片只放摘要，點開看細節 ---------- */
-/* 流程：一條精簡的步驟列，把畫面留給要檢查的資料。沒問題的步驟只顯示名稱，有狀況的才顯示摘要；點開看細節 */
-.pipeline { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.pipeline { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
 .stage {
-  display: inline-flex; flex-direction: row; align-items: center; gap: 8px; min-height: 30px; padding: 0 12px;
-  background: var(--surface); border-radius: var(--radius-pill); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
-  text-align: left; white-space: nowrap;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; min-height: 64px; padding: 10px 12px;
+  background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
+  text-align: left; white-space: normal;
 }
-.stage.ok .summary, .stage.skip .summary { display: none; }
 .stage:hover:not(:disabled) { background: var(--surface); box-shadow: var(--shadow-window); }
 .stage .label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
-.stage .summary { font-size: 12px; font-weight: 400; color: var(--text); line-height: 1.4; }
+.stage .summary { font-size: 12.5px; font-weight: 400; color: var(--text); line-height: 1.4; }
 .stage.review .summary { color: var(--warning-text); }
 .stage.confirmed .summary { color: var(--accent-text); }
 .stage.error { background: var(--danger-soft); }
 .stage.error .summary { color: var(--danger-text); }
 .stage.skip { opacity: .5; }
-.stage.open, .stage.open:hover:not(:disabled) { box-shadow: inset 0 0 0 1.5px var(--text-strong); }
+.stage.open, .stage.open:hover:not(:disabled) { box-shadow: 0 0 0 1.5px var(--text-strong); }
 .stage-detail {
   margin-top: 8px; padding: 14px 18px; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-card);
 }
@@ -623,8 +621,19 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .menu-item:hover:not(:disabled) { background: var(--ink-1); }
 .menu-item .muted { margin-left: auto; font-size: 11.5px; }
 .sheet-name { font-size: 13px; }
-/* 工作表視窗：只留工作表本身，不放結果的標題、進度與按鈕 */
-body.sheet-window .result-head, body.sheet-window .progress, body.sheet-window .tabs { display: none; }
-body.sheet-window .work { padding-top: 16px; }
 /* 欄數少的工作表：列號欄維持窄寬，不被拉開 */
 .source-grid th.rowno, .source-grid th.corner { width: 48px; }
+
+/* 原始資料左右並排：兩邊各自捲動，工具列收成一行 */
+.source-top { margin-bottom: 8px; }
+.source-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.source-split.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.source-pane { min-width: 0; }
+.source-split.two .source-pane .toolbar { flex-wrap: wrap; gap: 6px; row-gap: 6px; }
+.source-split.two .source-pane .sheet-select { flex: 1 1 100%; }   /* 並排時工作表一行，跳列與翻頁一行 */
+.source-split.two .source-pane .toolbar .spacer { display: none; }
+.source-split.two .jump { flex: 1 1 80px; }
+.source-split.two .range { white-space: nowrap; font-size: 12px; }
+.sheet-select { min-width: 140px; max-width: 100%; flex: 1 1 160px; height: 30px; padding: 0 8px; border: 0; border-radius: var(--radius-md, 8px);
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); font: inherit; font-size: 13px; color: var(--text-strong); }
+.source-split.two .source-wrap { max-height: calc(100vh - 300px); }

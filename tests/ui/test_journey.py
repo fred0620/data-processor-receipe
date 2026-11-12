@@ -103,8 +103,11 @@ def test_one_number_for_progress(ui):
     assert page.inner_text("#runStatus").strip() == f"{rows} 列需檢查"
     assert page.locator(".tab:has-text('結果') .count").inner_text() == str(rows)
     assert f"/ {rows} 列" in page.inner_text("#progress")
-    # 流程列：沒問題的步驟只顯示名稱，有狀況的才顯示摘要
-    assert not page.locator("#pipeline .stage.ok .summary").first.is_visible()
-    assert page.locator("#pipeline .stage.review .summary").first.is_visible()
-    height = page.locator("#pipeline").bounding_box()["height"]
-    assert height <= 72, f"流程列太高（{height}px），會擠掉要檢查的資料"
+    # 流程維持 Load → Export 的卡片：每一步都是一張卡片，寫著這一步的摘要
+    cards = page.locator("#pipeline .stage")
+    for i in range(cards.count()):
+        card = cards.nth(i)
+        if "skip" in (card.get_attribute("class") or ""):
+            continue
+        assert card.locator(".summary").is_visible() and card.locator(".summary").inner_text().strip(), card.inner_text()
+        assert card.bounding_box()["height"] >= 56, "卡片要放得下名稱與摘要兩行"
