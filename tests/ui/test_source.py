@@ -45,7 +45,8 @@ def _assert_snapped(page, side=None):
     page.wait_for_timeout(400)
     view = page.evaluate("""(scope) => {
       const wrap = document.querySelector(scope + ' .source-wrap');
-      const fixed = wrap.querySelector('tbody td.mark') || wrap.querySelector('tbody th.rowno');   // 固定在左邊的最後一欄
+      const marks = wrap.querySelectorAll('tbody tr:first-child td.mark');
+      const fixed = marks.length ? marks[marks.length - 1] : wrap.querySelector('tbody th.rowno');   // 固定在左邊的最後一欄
       const edge = fixed.getBoundingClientRect().right;
       const lefts = [...wrap.querySelectorAll('thead th:not(.corner):not(.mark-col)')].map((th) => th.getBoundingClientRect().left);
       const cell = wrap.querySelector('td.src-cell').getBoundingClientRect();
@@ -54,6 +55,17 @@ def _assert_snapped(page, side=None):
     assert view["cellRight"] <= view["wrapRight"] + 1, "要看的格子要完整看得到"
     if view["scroll"] > 0:
         assert any(abs(left - view["edge"]) <= 1 for left in view["lefts"]), view
+
+
+def _sheet(pane):
+    return pane.get_attribute("data-sheet")
+
+
+def _pick(pane, name):
+    """工作表選單：按鈕打開選單，選一個工作表。"""
+    pane.locator("summary.pick").click()
+    pane.locator(f".menu-item:has-text('{name}')").click()
+    expect(pane).to_have_attribute("data-sheet", name)
 
 
 def _pane(page, side):
@@ -76,16 +88,17 @@ def test_full_sheet_splits_with_matched_sheet(ui):
     assert len(ui.context.pages) == 1, "不開新視窗"
     assert ui.state("state.tab") == "source" and page.is_visible("#drawer"), "細節留著，可以邊看邊改"
     left, right = _pane(page, "左"), _pane(page, "右")
-    assert left.locator("select.sheet-select").input_value() == "發票明細"
-    assert right.locator("select.sheet-select").input_value() == "報關單"
+    assert _sheet(left) == "發票明細"
+    assert _sheet(right) == "報關單"
     assert left.locator("td.src-cell").inner_text() == "2,000"
     assert left.locator("thead th.target-col").inner_text() == "E"
     assert _target_row(left) == 6 and _target_row(right) == ui.state(
         "Number(Object.values(state.result.output.rows.find(r => r.rid === 'invoice:6').links).find(v => v.startsWith('declaration')).split(':').pop())")
     assert "第 3 列是「發票」的表頭" in left.locator(".source-legend").inner_text()
     _assert_snapped(page, "左")
-    for side in (left, right):   # 窄的時候工作表選單也要看得到名稱
-        assert side.locator("select.sheet-select").bounding_box()["width"] >= 130
+    for side in (left, right):   # 窄的時候工作表選單也要看得到完整名稱
+        text = side.locator("summary.pick .pick-text")
+        assert text.evaluate("e => e.scrollWidth <= e.clientWidth + 1"), text.inner_text()
     # 兩邊並排，各自捲動
     lb, rb = left.bounding_box(), right.bounding_box()
     assert abs(lb["y"] - rb["y"]) < 2 and lb["x"] + lb["width"] <= rb["x"]
@@ -96,8 +109,8 @@ def test_full_sheet_splits_with_matched_sheet(ui):
     section = page.locator("#drawer section:has(h4:text-is('原始 Excel'))")
     section.locator("button:has-text('報關單')").first.click()
     _open_full_sheet(page)
-    assert left.locator("select.sheet-select").input_value() == "發票明細" and _target_row(left) == 6
-    assert right.locator("select.sheet-select").input_value() == "報關單"
+    assert _sheet(left) == "發票明細" and _target_row(left) == 6
+    assert _sheet(right) == "報關單"
 
 
 def test_split_panes_switch_jump_and_close(ui):
@@ -109,19 +122,19 @@ def test_split_panes_switch_jump_and_close(ui):
     page.click(".tab-body [role=switch]:has-text('左右並排')")
     page.wait_for_selector(".tab-body .source-pane[data-side='右'] .source-grid")
     left, right = _pane(page, "左"), _pane(page, "右")
-    assert left.locator("select.sheet-select").input_value() == "發票明細"
-    assert right.locator("select.sheet-select").input_value() == "報關單"
-    right.locator("select.sheet-select").select_option("匯率")
+    assert _sheet(left) == "發票明細"
+    assert _sheet(right) == "報關單"
+    _pick(right, "匯率")
     expect(right.locator(".range")).to_contain_text("／4 列")   # 匯率表有 4 列
-    assert left.locator("select.sheet-select").input_value() == "發票明細", "換右邊不影響左邊"
+    assert _sheet(left) == "發票明細", "換右邊不影響左邊"
     left.locator("input.jump").fill("10")
     left.locator("input.jump").press("Enter")
     ui.settle()
     assert _target_row(left) == 10 and right.locator("tr.src-target").count() == 0
     page.click(".tab-body button:has-text('左右交換')")
     ui.settle()
-    assert left.locator("select.sheet-select").input_value() == "匯率"
-    assert right.locator("select.sheet-select").input_value() == "發票明細" and _target_row(right) == 10
+    assert _sheet(left) == "匯率"
+    assert _sheet(right) == "發票明細" and _target_row(right) == 10
     right.locator("button[aria-label='關掉右邊']").click()
     ui.settle()
     assert page.locator(".tab-body .source-pane").count() == 1
@@ -138,8 +151,8 @@ def test_compare_match_sides(ui):
     _open_full_sheet(page)
     left, right = _pane(page, "左"), _pane(page, "右")
     assert ui.state("state.tab") == "source"
-    assert right.locator("select.sheet-select").input_value() == "報關單" and _target_row(right) == 3
-    assert left.locator("select.sheet-select").input_value() == "發票明細" and _target_row(left) == 5
+    assert _sheet(right) == "報關單" and _target_row(right) == 3
+    assert _sheet(left) == "發票明細" and _target_row(left) == 5
     ui.shot("compare-sheets")
 
 
@@ -187,10 +200,10 @@ def test_source_pop_out_keeps_switching(ui):
         page.click(".tab-tools button:has-text('Pop out')")
     w = ui.watch(info.value, "pop")
     w.wait_for_selector(".tab-body .source-pane[data-side='右'] .source-grid")   # 帶著並排過去
-    _pane(w, "右").locator("select.sheet-select").select_option("匯率")
+    _pick(_pane(w, "右"), "匯率")
     _pane(w, "右").locator(".source-grid").wait_for()
     w.wait_for_timeout(300)
-    assert _pane(w, "右").locator("select.sheet-select").input_value() == "匯率", "pop out 後可以換工作表"
+    assert _sheet(_pane(w, "右")) == "匯率", "pop out 後可以換工作表"
     w.click(".tab-body [role=switch]:has-text('左右並排')")
     w.wait_for_selector(".tab-body .toolbar .chips")
     w.locator(".tab-body .toolbar .chips .chip").nth(1).click()
@@ -237,14 +250,16 @@ def test_match_status_on_source_sheets(ui):
     match = ui.state("state.result.matches[0]")
     row_of = lambda rid: int(rid.split(":")[-1])
 
-    def mark(pane, row):
+    def mark(pane, row, name=match["name"]):
         tr = pane.locator(f"tbody tr[data-row='{row}']")
-        return tr.get_attribute("class") or "", tr.locator("td.mark").inner_text().strip()
+        td = tr.locator(f"td.mark[data-match='{name}']")
+        return (tr.get_attribute("class") or "") + " " + (td.get_attribute("class") or ""), td.inner_text().strip()
 
     for item in match["rows"]:
         cls, text = mark(left, row_of(item["left"]))
         if item["rights"]:
-            assert text == "→ " + "、".join(str(row_of(r)) for r in item["rights"][:3]), (item, text)
+            want = f"{len(item['rights'])} 列" if len(item["rights"]) > 2 else "、".join(str(row_of(r)) for r in item["rights"])
+            assert text == "→ " + want, (item, text)
             assert ("m-open" if item["status"] == "review" else "m-done") in cls
         elif item["status"] == "unmatched":
             assert text == "找不到" and "m-open" in cls
@@ -257,11 +272,11 @@ def test_match_status_on_source_sheets(ui):
         assert text == ("候選" if row_of(rid) in candidates else "沒用到") and "m-open" in cls, (rid, text)
     assert any(row_of(r) not in candidates for r in match["unused_right"]), "範例要有真的沒用到的列"
     excluded = ui.state("state.result.excluded[0].row")
-    cls, text = mark(left, excluded)
+    cls, text = mark(left, excluded, match["name"])
     assert text == "已排除" and "m-skip" in cls
-    # 要處理的列數寫在上方
-    open_left = left.locator("tbody tr.m-open").count()
-    assert f"{open_left} 列要處理" in left.locator(".match-legend").inner_text()
+    # 要處理的列數寫在上方，每個配對分開算
+    open_left = left.locator(f"tbody td.mark.open[data-match='{match['name']}']").count()
+    assert f"報關單 {open_left} 列要處理" in left.locator(".match-legend").inner_text()
     # 已配對的列文字淡化，要處理的列明顯
     done = left.locator("tbody tr.m-done td:not(.mark)").first.evaluate("e => getComputedStyle(e).color")
     plain = left.locator("tbody tr.src-header td:not(.mark)").first.evaluate("e => getComputedStyle(e).color")
@@ -269,10 +284,10 @@ def test_match_status_on_source_sheets(ui):
     ui.shot("source-match-marks")
     # 按「→ 4」：右邊跳到配到的那一列
     paired = next(x for x in match["rows"] if x["rights"] and x["status"] != "review")
-    left.locator(f"tbody tr[data-row='{row_of(paired['left'])}'] .mark-link").click()
+    left.locator(f"tbody tr[data-row='{row_of(paired['left'])}'] td[data-match='{match['name']}'] .mark-link").click()
     expect(right.locator("tr.src-target th.rowno")).to_have_text(str(row_of(paired["rights"][0])))
     # 右邊按「← 6」：左邊跳回來
-    right.locator(f"tbody tr[data-row='{row_of(paired['rights'][0])}'] .mark-link").click()
+    right.locator(f"tbody tr[data-row='{row_of(paired['rights'][0])}'] td[data-match='{match['name']}'] .mark-link").click()
     expect(left.locator("tr.src-target th.rowno")).to_have_text(str(row_of(paired["left"])))
 
 
@@ -285,4 +300,58 @@ def test_single_sheet_mark_opens_split(ui):
     page.locator(".tab-body .source-grid .mark-link").first.click()
     right = _pane(page, "右")
     right.locator("tr.src-target").wait_for()
-    assert right.locator("select.sheet-select").input_value() == "報關單"
+    assert _sheet(right) == "報關單"
+
+
+def test_one_mark_column_per_match_and_cycle(ui):
+    """一張表參與幾個配對就有幾欄配對欄（欄名是對面的表）；多對一按同一個連結會換到下一筆，對面配到的列都淡淡標出。"""
+    page = ui.run_sample()
+    page.click(".tab:has-text('原始資料')")
+    page.click(".tab-body [role=switch]:has-text('左右並排')")
+    page.wait_for_selector(".tab-body .source-pane[data-side='右'] .source-grid td.mark")
+    left, right = _pane(page, "左"), _pane(page, "右")
+    heads = left.locator("thead th.mark-col")
+    assert heads.all_inner_texts() == ["報關單", "匯率表"], "發票明細配了報關單和匯率表，各一欄"
+    assert "facing" in (heads.nth(0).get_attribute("class") or ""), "對著右邊那張表的配對欄要標出"
+    assert "報關單" in left.locator(".match-legend").inner_text() and "匯率表" in left.locator(".match-legend").inner_text()
+    # 兩欄配對欄都固定在左邊，左右捲到底也看得到
+    left.locator(".source-wrap").evaluate("e => e.scrollLeft = e.scrollWidth")
+    assert left.locator("tbody tr[data-row='5'] td.mark").nth(1).is_visible()
+    # 右邊換成匯率表：多對一，一列匯率配到好幾張發票
+    _pick(right, "匯率")
+    assert right.locator("thead th.mark-col").all_inner_texts() == ["發票"]
+    rate = ui.state("state.result.matches.find(m => m.right_label === '匯率表').name")
+    usd = right.locator(f"tbody td.mark[data-match='{rate}'] .mark-link:has-text('列')").first
+    total = int(usd.inner_text().split()[1])
+    assert total > 2
+    row_usd = int(usd.locator("xpath=ancestor::tr").get_attribute("data-row"))
+    seen = []
+    for step in range(3):
+        right.locator(f"tbody tr[data-row='{row_usd}'] td[data-match='{rate}'] .mark-link").click()
+        expect(left.locator(".cycle-note")).to_contain_text(f"第 {step + 1}／{total} 筆")
+        seen.append(left.locator("tr.src-target th.rowno").inner_text())
+        assert left.locator("tbody tr.src-related").count() == total - 1, "其他配到的列淡淡標出"
+        assert _target_row(right) == row_usd, "自己這一列也標出來，兩邊成對"
+    assert len(set(seen)) == 3, f"每按一下換下一筆：{seen}"
+    ui.shot("source-cycle")
+
+
+def test_sheet_menu_follows_stageshow(ui):
+    """工作表選單是按鈕加 Menu：目前的項目打勾，點外面或 Esc 關掉。"""
+    page = ui.run_sample()
+    page.click(".tab:has-text('原始資料')")
+    page.click(".tab-body [role=switch]:has-text('左右並排')")
+    right = _pane(page, "右")
+    right.locator(".source-grid").wait_for()
+    assert page.locator(".tab-body select").count() == 0, "不用瀏覽器原生的下拉選單"
+    menu = right.locator("details.pick-menu")
+    right.locator("summary.pick").click()
+    expect(menu).to_have_attribute("open", "")
+    checked = right.locator(".menu-item[aria-checked='true']")
+    assert checked.count() == 1 and "報關單" in checked.inner_text() and checked.locator("svg").count() == 1
+    ui.shot("sheet-menu")
+    page.mouse.click(5, 5)
+    expect(menu).not_to_have_attribute("open", "")
+    right.locator("summary.pick").click()
+    page.keyboard.press("Escape")
+    expect(menu).not_to_have_attribute("open", "")

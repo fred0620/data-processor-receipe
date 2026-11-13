@@ -1607,7 +1607,7 @@ async function renderSource() {
       split ? btn({ text: "左右交換", icon: "swap", onclick: () => { [state.source, state.source2] = [state.source2, state.source]; renderSource(); } }) : null),
     el("div", { class: `source-split${split ? " two" : ""}` },
       panes.map((src, i) => sourcePane(r, src, pages[i], split ? (i ? "右" : "左") : null, split ? panes[1 - i].sheet : null,
-        (place) => showPartner(i, place)))));
+        (from, mark) => showPartner(i, from, mark)))));
   body.querySelectorAll(".source-pane").forEach((pane, i) => {
     const focus = pane.querySelector(".src-cell") || pane.querySelector(".src-target");
     if (!focus) return;
@@ -1616,25 +1616,46 @@ async function renderSource() {
   });
 }
 
-/* 按配對欄的「→ 4」：另一邊跳到配到的那一列；只有一張表時打開並排 */
-function showPartner(index, place) {
-  const spot = { sheet: place.sheet, row: place.row, col: null, start: null };
-  if (index === 0) state.source2 = spot; else state.source = spot;
+/* 按配對欄的連結：另一邊打開配到的列，自己這一列也標出來，兩邊成對。
+   配到好幾列（多對一）時，對面全部淡淡標出，再按一下同一個連結就換到下一筆。只有一張表時打開並排。 */
+document.addEventListener("click", (e) => {
+  if (!e.target.isConnected) return;   // 點的是選單裡的開關，選單已經重畫：不算點在外面
+  document.querySelectorAll("details.menu[open]").forEach((menu) => { if (!menu.contains(e.target)) menu.open = false; });
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.querySelectorAll("details.menu[open]").forEach((menu) => { menu.open = false; });
+});
+
+let partnerCycle = { key: null, index: 0 };
+function showPartner(index, from, mark) {
+  const key = `${from.sheet}\u0000${from.row}\u0000${mark.match}`;
+  const step = partnerCycle.key === key ? (partnerCycle.index + 1) % mark.targets.length : 0;
+  partnerCycle = { key, index: step };
+  const target = mark.targets[step];
+  const related = mark.targets.filter((p) => p.sheet === target.sheet).map((p) => p.row);
+  const spot = { sheet: target.sheet, row: target.row, rows: related.length > 1 ? related : null, col: null, start: null,
+    cycle: mark.targets.length > 1 ? { index: step, total: mark.targets.length, from: `${mark.label}第 ${from.row} 列` } : null };
+  const own = { ...(index === 0 ? state.source : state.source2), row: from.row, rows: null, col: null, cycle: null, start: null };
+  if (index === 0) { state.source = own; state.source2 = spot; } else { state.source2 = own; state.source = spot; }
   renderSource();
 }
 
-/* 原始表每一列的配對狀態：已配對的淡化並寫上配到哪一列，要處理的（找不到、沒用到、候選、待確認）標橘色，排除的列另外標出。
-   一張表參與好幾個配對時，用和另一邊工作表有關的那個配對，沒有並排時用第一個。 */
-function matchMarks(r, sheet, otherSheet) {
-  const sheetsOf = (table) => r.inputs[table]?.sheets || [];
-  const involved = r.matches.filter((m) => sheetsOf(m.left).includes(sheet) || sheetsOf(m.right).includes(sheet));
-  const marks = new Map();
+/* 原始表每一列的配對狀態，每個配對一欄（欄名是對面的表）：三張表串起來或一張表配好幾張時，各自一欄。
+   已配對的淡化並寫上配到哪幾列，要處理的（找不到、沒用到、候選、待確認）標橘色，排除的列另外標出。 */
+function matchMarks(r, sheet) {
+  /* 配對的左表可以是上一個配對的結果（例如先配報關單再帶入匯率），順著串回原本那張表 */
+  const root = (table) => { const seen = new Set(); while (!r.inputs[table] && !seen.has(table)) { seen.add(table); table = r.matches.find((m) => m.name === table)?.left ?? table; } return table; };
+  const sheetsOf = (table) => r.inputs[root(table)]?.sheets || [];
   const here = (rid) => { const p = sourcePlace(rid); return p && p.sheet === sheet ? p : null; };
-  const short = (places) => places.slice(0, 3).map((p) => p.row).join("、") + (places.length > 3 ? "…" : "");
-  const m = involved.find((x) => otherSheet && otherSheet !== sheet
-    && (sheetsOf(x.left).includes(otherSheet) || sheetsOf(x.right).includes(otherSheet))) || involved[0];
-  if (m) {
+  const rows = (places) => (places.length > 2 ? `${places.length} 列` : places.map((p) => p.row).join("、"));
+  const columns = [];
+  for (const m of r.matches) {
     const asLeft = sheetsOf(m.left).includes(sheet);
+    const asRight = sheetsOf(m.right).includes(sheet);
+    if (!asLeft && !asRight) continue;
+    const other = r.inputs[root(asLeft ? m.right : m.left)]?.label || (asLeft ? m.right_label : m.left_label);   // 對面原本那張表的名稱
+    const marks = new Map();
+    const base = { match: m.name, label: r.inputs[root(asLeft ? m.left : m.right)]?.label || "" };
     for (const row of m.rows) {
       const rights = row.rights.map(sourcePlace).filter(Boolean);
       const left = sourcePlace(row.left);
@@ -1642,52 +1663,66 @@ function matchMarks(r, sheet, otherSheet) {
       if (asLeft) {
         const p = here(row.left);
         if (!p) continue;
-        if (rights.length) marks.set(p.row, { kind: pending ? "open" : "done", text: `→ ${short(rights)}`, targets: rights,
-          title: `配到${m.right_label}第 ${rights.map((x) => x.row).join("、")} 列${pending ? "，待確認" : ""}` });
+        if (rights.length) marks.set(p.row, { ...base, kind: pending ? "open" : "done", text: `→ ${rows(rights)}`, targets: rights,
+          title: `配到${other}第 ${rights.map((x) => x.row).join("、")} 列${pending ? "，待確認" : ""}` });
         else if (row.status === "ambiguous") {
           const cands = row.candidates.map((c) => sourcePlace(c.rid)).filter(Boolean);
-          marks.set(p.row, { kind: "open", text: `${cands.length} 筆候選`, targets: cands, title: `有 ${cands.length} 筆可能的${m.right_label}，要選一筆` });
-        } else if (row.status === "none") marks.set(p.row, { kind: "done", text: "確認沒有", title: "已確認沒有對應" });
-        else marks.set(p.row, { kind: "open", text: "找不到", title: `找不到對應的${m.right_label}` });
+          marks.set(p.row, { ...base, kind: "open", text: `${cands.length} 筆候選`, targets: cands, title: `有 ${cands.length} 筆可能的${other}，要選一筆` });
+        } else if (row.status === "none") marks.set(p.row, { ...base, kind: "done", text: "確認沒有", title: `已確認沒有對應的${other}` });
+        else marks.set(p.row, { ...base, kind: "open", text: "找不到", title: `找不到對應的${other}` });
       } else {
         for (const rid of row.rights) {
           const p = here(rid);
           if (!p || !left) continue;
-          const mark = marks.get(p.row) || { kind: "done", lefts: [] };
-          mark.lefts.push(left);
+          const mark = marks.get(p.row) || { ...base, kind: "done", targets: [] };
+          mark.targets.push(left);
           if (pending) mark.kind = "open";
           marks.set(p.row, mark);
         }
         if (row.status === "ambiguous" && left) for (const c of row.candidates) {
           const p = here(c.rid);
-          if (p && !marks.has(p.row)) marks.set(p.row, { kind: "open", text: "候選", targets: [left], title: `${m.left_label}第 ${left.row} 列的候選` });
+          if (p && !marks.has(p.row)) marks.set(p.row, { ...base, kind: "open", text: "候選", targets: [left], title: `${other}第 ${left.row} 列的候選` });
         }
       }
     }
-    if (!sheetsOf(m.left).includes(sheet)) {
-      for (const mark of marks.values()) if (mark.lefts) {
-        Object.assign(mark, { text: `← ${short(mark.lefts)}`, targets: mark.lefts,
-          title: `配到${m.left_label}第 ${mark.lefts.map((x) => x.row).join("、")} 列${mark.kind === "open" ? "，待確認" : ""}` });
+    if (!asLeft) {
+      for (const mark of marks.values()) if (!mark.text) {
+        mark.text = `← ${rows(mark.targets)}`;
+        mark.title = `配到${other}第 ${mark.targets.map((x) => x.row).join("、")} 列${mark.kind === "open" ? "，待確認" : ""}`;
       }
       for (const rid of m.unused_right || []) {
         const p = here(rid);
-        if (p && !marks.has(p.row)) marks.set(p.row, { kind: "open", text: "沒用到", title: `沒有任何${m.left_label}配到這一列` });   // 是候選時寫候選
+        if (p && !marks.has(p.row)) marks.set(p.row, { ...base, kind: "open", text: "沒用到", title: `沒有任何${other}配到這一列` });   // 是候選時寫候選
       }
     }
+    columns.push({ match: m, other, marks, open: [...marks.values()].filter((x) => x.kind === "open").length });
   }
-  for (const entry of r.excluded) {   // 排除的列不參與配對
+  const skipped = new Map();   // 排除的列不參與配對
+  for (const entry of r.excluded) {
     const p = here(entry.rid);
-    if (p) marks.set(p.row, { kind: "skip", text: "已排除", title: entry.label ? `排除：${entry.label}` : "排除" });
+    if (p) skipped.set(p.row, entry.label ? `排除：${entry.label}` : "排除");
   }
-  if (!marks.size) return null;
-  const open = [...marks.values()].filter((x) => x.kind === "open").length;
-  return { match: m, marks, open };
+  return columns.length || skipped.size ? { columns, skipped } : null;
+}
+
+/* 下拉選單照 Stageshow：按鈕打開 Popover，裡面是 Menu，目前的項目打勾 */
+function pickMenu(label, current, items, onPick, ariaLabel) {
+  const menu = el("details", { class: "menu pick-menu" },
+    el("summary", { class: "button ghost small pick", "aria-label": ariaLabel, dataset: { value: current } },
+      el("span", { class: "pick-text", text: label }), icon("down")),
+    el("div", { class: "menu-body", role: "menu" }, items.map(([value, text, note]) => el("button", {
+      type: "button", role: "menuitemradio", "aria-checked": value === current ? "true" : "false",
+      class: `menu-item${value === current ? " on" : ""}`,
+      onclick: () => { menu.open = false; if (value !== current) onPick(value); },
+    }, el("span", { class: "menu-check" }, value === current ? icon("check") : null), el("span", { text }),
+      note ? el("span", { class: "muted", text: note }) : null))));
+  return menu;
 }
 
 function sourcePane(r, src, page, side, otherSheet = null, onPartner = () => {}) {
   src.sheet = page.name;
-  const marked = matchMarks(r, page.name, otherSheet);
-  const marks = marked?.marks;
+  const marked = matchMarks(r, page.name);
+  const columns = marked ? (marked.columns.length ? marked.columns : [{ match: null, other: "配對", marks: new Map(), open: 0 }]) : [];
   const headers = Object.values(r.inputs).flatMap((input) => {
     const pos = input.positions?.[page.name];
     return pos ? [{ row: pos.header_row, label: input.label }] : [];
@@ -1698,39 +1733,48 @@ function sourcePane(r, src, page, side, otherSheet = null, onPartner = () => {})
   const jump = el("input", { class: "search jump", type: "number", min: 1, max: page.total, placeholder: "跳到第幾列",
     "aria-label": side ? `${side}邊跳到第幾列` : "跳到第幾列" });
   jump.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && Number(jump.value) >= 1) go({ row: Number(jump.value), col: null, start: null });
+    if (e.key === "Enter" && Number(jump.value) >= 1) go({ row: Number(jump.value), rows: null, cycle: null, col: null, start: null });
   });
+  const related = new Set(src.rows || []);
   const wrap = prefs.get("wrap", false);
+  const fixedLeft = (k) => `left:${48 + 74 * k}px`;   // 配對欄固定在列號右邊，一個配對一欄
   const table = el("table", { class: `grid source-grid${wrap ? " wrap" : ""}` },
-    el("thead", {}, el("tr", {}, el("th", { class: "corner" }), marks ? el("th", { class: "mark-col", text: "配對" }) : null,
+    el("thead", {}, el("tr", {}, el("th", { class: "corner" }),
+      columns.map((col, k) => el("th", { class: `mark-col${col.other === otherSheetLabel(r, otherSheet) ? " facing" : ""}`, style: fixedLeft(k),
+        title: col.match ? `「${col.match.label}」：和${col.other}的配對` : null, text: col.other })),
       Array.from({ length: page.width }, (_, i) => el("th", {
       class: i === src.col ? "target-col" : null, text: colLetter(i) })))),
     el("tbody", {}, page.rows.map((cells, offset) => {
       const number = page.start + offset;
       const header = headers.find((h) => h.row === number);
       const target = number === src.row;
-      const mark = marks?.get(number);
-      return el("tr", { class: [header ? "src-header" : "", target ? "src-target" : "", mark ? `m-${mark.kind}` : ""].filter(Boolean).join(" ") || null, dataset: { row: number } },
+      const skip = marked?.skipped.get(number);
+      const marks = columns.map((col) => col.marks.get(number));
+      const kind = skip ? "skip" : marks.some((x) => x?.kind === "open") ? "open" : marks.some((x) => x) ? "done" : "";
+      return el("tr", { class: [header ? "src-header" : "", target ? "src-target" : "", !target && related.has(number) ? "src-related" : "",
+        kind ? `m-${kind}` : ""].filter(Boolean).join(" ") || null, dataset: { row: number } },
         el("th", { class: "rowno", title: header ? `${header.label}的表頭` : null, text: number }),
-        marks ? el("td", { class: "mark" }, !mark ? null : mark.targets?.length
-          ? el("button", { type: "button", class: "mark-link", text: mark.text, title: `${mark.title}，按一下在另一邊打開`,
-            onclick: () => onPartner(mark.targets[0]) })
-          : el("span", { class: "mark-text", text: mark.text, title: mark.title })) : null,
+        columns.map((col, k) => {
+          const mark = marks[k];
+          const cell = skip ? (k === 0 ? el("span", { class: "mark-text", text: "已排除", title: skip }) : null)
+            : !mark ? null : mark.targets?.length
+              ? el("button", { type: "button", class: "mark-link", text: mark.text,
+                title: `${mark.title}${mark.targets.length > 1 ? "。按一下看第一筆，再按一下換下一筆" : "，按一下在另一邊打開"}`,
+                onclick: () => onPartner({ sheet: page.name, row: number }, mark) })
+              : el("span", { class: "mark-text", text: mark.text, title: mark.title });
+          return el("td", { class: `mark${mark?.kind === "open" && !skip ? " open" : ""}`, style: fixedLeft(k), dataset: { match: col.match?.name || "" } }, cell);
+        }),
         cells.map((value, i) => el("td", { class: target && i === src.col ? "src-cell" : null, title: value || null },
           el("div", { class: "cell-text", text: value }))));
     })));
-  /* 並排時工作表用下拉選單，兩邊的工具列才放得下；只有一張時用標籤 */
+  /* 並排時工作表用選單，兩邊的工具列才放得下；只有一張時用標籤 */
   const label = (name) => (usedBy(name).length ? `${name}・${usedBy(name).join("、")}` : name);
-  const pick = (name) => go({ sheet: name, row: null, col: null, start: 1 });
+  const pick = (name) => go({ sheet: name, row: null, rows: null, cycle: null, col: null, start: 1 });
   const picker = side
-    ? (() => {
-      const select = el("select", { class: "sheet-select", "aria-label": `${side}邊的工作表` },
-        page.names.map((name) => el("option", { value: name, text: label(name), selected: name === page.name })));
-      select.addEventListener("change", () => pick(select.value));
-      return select;
-    })()
+    ? pickMenu(label(page.name), page.name, page.names.map((name) => [name, name, usedBy(name).join("、")]), pick, `${side}邊的工作表`)
     : chips(page.names.map((name) => [name, label(name)]), page.name, pick);
-  return el("section", { class: "source-pane", dataset: { side: side || "" } },
+  const cycle = src.cycle;
+  return el("section", { class: "source-pane", dataset: { side: side || "", sheet: page.name } },
     el("div", { class: "toolbar" },
       picker,
       el("span", { class: "spacer" }),
@@ -1742,10 +1786,20 @@ function sourcePane(r, src, page, side, otherSheet = null, onPartner = () => {})
     headers.length || src.row ? el("p", { class: "muted small-text source-legend" },
       headers.map((h) => `第 ${h.row} 列是「${h.label}」的表頭`).join("，"),
       src.row ? `${headers.length ? "；" : ""}標示的是第 ${src.row} 列${src.col !== null && src.col !== undefined ? `的 ${colLetter(src.col)}${src.row}` : ""}` : "") : null,
-    marked?.match ? el("p", { class: "small-text match-legend", title: "淡色：已配對。橘色：找不到、沒用到、候選或待確認。按「→ 4」在另一邊打開配到的那一列" },
-      el("span", { class: "muted", text: `配對依「${marked.match.label}」・` }),
-      marked.open ? el("span", { class: "open-count", text: `${marked.open} 列要處理` }) : el("span", { class: "muted", text: "沒有要處理的列" })) : null,
+    cycle ? el("p", { class: "small-text cycle-note" },
+      el("b", { text: `第 ${cycle.index + 1}／${cycle.total} 筆` }),
+      el("span", { class: "muted", text: "・再按一下換下一筆", title: `${cycle.from}配到的列都淡淡標出` })) : null,
+    marked?.columns.length ? el("p", { class: "small-text match-legend", title: "淡色：已配對。橘色：找不到、沒用到、候選或待確認。按配對欄的列號在另一邊打開" },
+      marked.columns.flatMap((col, k) => [k ? el("span", { class: "muted", text: "・" }) : null,
+        el("span", { class: "muted", text: `${col.other} ` }),
+        col.open ? el("span", { class: "open-count", text: `${col.open} 列要處理` }) : el("span", { class: "muted", text: "都已配對" })])) : null,
     page.rows.length ? el("div", { class: "table-wrap source-wrap" }, table) : el("div", { class: "note", text: "這張工作表沒有資料。" }));
+}
+
+/* 另一邊工作表對應的表名：標出面對它的配對欄 */
+function otherSheetLabel(r, sheet) {
+  if (!sheet) return null;
+  return Object.values(r.inputs).find((input) => (input.sheets || []).includes(sheet))?.label || null;
 }
 
 /* 版面或字型改變時（細節打開、並排、拖曳寬度、新視窗的字型晚到），欄寬會跟著變，重新對齊要看的格子；使用者自己捲過就不再動 */
