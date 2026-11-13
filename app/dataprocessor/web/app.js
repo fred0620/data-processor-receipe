@@ -242,16 +242,41 @@ function setupPanes() {
   }
   const collapse = (on) => {
     layout.classList.toggle("side-collapsed", on);
-    $("sideToggle").title = on ? "展開左欄" : "收起左欄";
-    $("sideToggle").setAttribute("aria-label", $("sideToggle").title);
-    $("sideToggle").setAttribute("aria-pressed", String(on));
     prefs.set("sideCollapsed", on);
+    fitPanes();
   };
   collapse(prefs.get("sideCollapsed", false));
-  $("sideToggle").addEventListener("click", () => collapse(!layout.classList.contains("side-collapsed")));
+  $("sideToggle").addEventListener("click", () => {
+    if (layout.classList.contains("side-auto")) { panes.sideHeld = true; fitPanes(); return; }   // 暫時收起的，按了就打開
+    collapse(!layout.classList.contains("side-collapsed"));
+  });
   window.addEventListener("resize", () => {
     for (const [name, pane] of Object.entries(PANES)) paneWidth(name, prefs.get(`${name}Width`, pane.fallback));
+    fitPanes();
   });
+}
+
+/* 打開細節後，中間的結果至少要留 MIN_MAIN 寬，否則表格只看得到前幾欄、步驟卡和分頁也會擠成好幾行。
+   不夠時先暫時收起左欄（不改使用者的設定，關掉細節就回來）；收起後還是太窄，細節改成蓋在表格上。 */
+const MIN_MAIN = 900;
+const MIN_MAIN_OVER = 480;
+const panes = { sideHeld: false };
+
+function fitPanes() {
+  const layout = document.querySelector(".layout");
+  const width = (v) => parseInt(getComputedStyle(layout).getPropertyValue(v), 10) || 0;
+  const drawer = layout.classList.contains("with-drawer") ? width("--drawer-w") : 0;
+  if (!drawer) panes.sideHeld = false;
+  const userCollapsed = layout.classList.contains("side-collapsed") || document.body.classList.contains("popout");
+  const side = userCollapsed ? 0 : width("--side-w");
+  const auto = Boolean(drawer) && !userCollapsed && !panes.sideHeld && window.innerWidth - side - drawer < MIN_MAIN;
+  layout.classList.toggle("side-auto", auto);
+  const left = userCollapsed || auto ? 0 : side;
+  layout.classList.toggle("drawer-over", Boolean(drawer) && window.innerWidth - left - drawer < MIN_MAIN_OVER);
+  const hidden = userCollapsed || auto;
+  $("sideToggle").title = hidden ? "展開左欄" : "收起左欄";
+  $("sideToggle").setAttribute("aria-label", $("sideToggle").title);
+  $("sideToggle").setAttribute("aria-pressed", String(hidden));
 }
 
 /* ---------- Recipe ---------- */
@@ -967,6 +992,7 @@ function renderDrawer() {
   const row = r && (state.tab === "rows" || state.tab === "source") && r.output.rows.find((x) => x.rid === state.selected);
   $("drawer").hidden = !row;
   document.querySelector(".layout").classList.toggle("with-drawer", Boolean(row));
+  fitPanes();
   if (!row) return;
   $("drawerTitle").textContent = row.sheet && state.result.inputs && Object.values(state.result.inputs).some((i) => (i.sheets || []).length > 1)
     ? `${row.sheet}・第 ${row.row ?? "?"} 列` : `第 ${row.row ?? "?"} 列`;
@@ -1931,6 +1957,9 @@ function bind() {
   $("newRecipe").addEventListener("click", () => editRecipe());
   $("workbookInput").addEventListener("change", (e) => { if (e.target.files[0]) uploadWorkbook(e.target.files[0]); e.target.value = ""; });
   const zone = $("dropZone");
+  zone.addEventListener("keydown", (e) => {   // 選檔區也能用鍵盤：Tab 到這裡按 Enter 或空白鍵
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); zone.click(); }   // label 被按下時瀏覽器會打開它的檔案選擇
+  });
   zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("over"); });
   zone.addEventListener("dragleave", () => zone.classList.remove("over"));
   zone.addEventListener("drop", (e) => { e.preventDefault(); zone.classList.remove("over"); if (e.dataTransfer.files[0]) uploadWorkbook(e.dataTransfer.files[0]); });

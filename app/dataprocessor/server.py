@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -57,7 +58,8 @@ app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
 _clients: dict[str, float] = {}
 _live: dict[str, int] = {}        # 保持連線中的頁面 → 連線數
 _clients_lock = threading.Lock()
-_jobs: dict[str, dict] = {}       # 背景工作；有未完成的工作時不會自動結束
+_jobs: set[str] = set()           # 執行中的工作；有工作在跑時不會自動結束
+_state_lock = threading.Lock()    # 保護 _jobs、_runs、_workbooks：Flask 每個請求一個執行緒，同時改會出錯
 
 
 class Missing(Exception):
@@ -351,9 +353,12 @@ def _register_workbook(source: Path, name: str) -> dict:
     sheets = read_workbook(source)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
     workbook_id = uuid.uuid4().hex[:12]
-    _workbooks[workbook_id] = {"path": source, "name": name, "hash": digest, "sheets": sheets}
-    while len(_workbooks) > MAX_WORKBOOKS:   # 只留最近幾份，舊的上傳檔一併刪除
-        old = _workbooks.pop(next(iter(_workbooks)))
+    removed = []
+    with _state_lock:
+        _workbooks[workbook_id] = {"path": source, "name": name, "hash": digest, "sheets": sheets}
+        while len(_workbooks) > MAX_WORKBOOKS:   # 只留最近幾份，舊的上傳檔一併刪除
+            removed.append(_workbooks.pop(next(iter(_workbooks))))
+    for old in removed:
         if old["path"].parent == paths.UPLOADS:
             old["path"].unlink(missing_ok=True)
     log.info("載入 workbook id=%s sheets=%d", workbook_id, len(sheets))
@@ -400,7 +405,9 @@ def use_sample(name):
 
 
 def _execute(run_id: str) -> dict:
-    record = _runs[run_id]
+    record = _runs.get(run_id)
+    if record is None:
+        raise Missing("找不到這次處理結果，請重新執行")
     workbook = _workbooks.get(record["workbook"])
     if workbook is None:
         raise Missing("檔案已關閉，請重新上傳")
@@ -410,22 +417,42 @@ def _execute(run_id: str) -> dict:
         raise _RecipeInvalid(exc) from None
     review = ReviewStore(paths.REVIEWS, recipe.id, workbook["hash"])
     mappings = MappingStore(paths.MAPPINGS, recipe.id)
-    _jobs[run_id] = {"finished": False}
+    with _state_lock:
+        _jobs.add(run_id)
     started = time.time()
     try:
         keep: dict = {}
         with _run_lock:
             result = engine.run(recipe, workbook["sheets"], review, mappings, paths.SCRATCH, keep)
     finally:
-        _jobs[run_id]["finished"] = True
-    result["run_id"] = run_id
-    result["workbook"] = {"id": record["workbook"], "name": workbook["name"]}
-    result["decisions"] = review.count()               # 人工決定的數量，重設前讓使用者知道會清掉多少
-    result["can_restore"] = review.backup.exists()     # 剛重設過，可以復原
-    record.update(result=result, review=review, job=keep.get("job"))   # job 是執行紀錄，覆核某一列時用
+        with _state_lock:
+            _jobs.discard(run_id)
+    _finish(record, run_id, result, review)
+    record["job"] = keep.get("job")   # job 是執行紀錄，覆核某一列、只改確認時用
     log.info("執行 run=%s recipe=%s status=%s rows=%d issues=%d seconds=%.1f", run_id, log_text(recipe.id),
              result["status"], len(result["output"]["rows"]), result["counts"]["review"], time.time() - started)
     return result
+
+
+def _finish(record: dict, run_id: str, result: dict, review: ReviewStore) -> None:
+    result["run_id"] = run_id
+    result["workbook"] = {"id": record["workbook"], "name": _workbooks.get(record["workbook"], {}).get("name", "")}
+    result["decisions"] = review.count()               # 人工決定的數量，重設前讓使用者知道會清掉多少
+    result["can_restore"] = review.backup.exists()     # 剛重設過，可以復原
+    record.update(result=result, review=review)
+
+
+def _refresh_dismissed(run_id: str) -> dict:
+    """只改了確認：沿用上次的執行紀錄重算狀態，不重跑讀取、配對與 SQL。做不到時才整個重跑。"""
+    record = _run_record(run_id)
+    job = record.get("job")
+    with _run_lock:
+        if job is not None:
+            job.review = record["review"]
+            if job.refresh_dismissed():
+                _finish(record, run_id, job.result(), record["review"])
+                return record["result"]
+    return _execute(run_id)
 
 
 class _RecipeInvalid(Exception):
@@ -447,9 +474,10 @@ def start_run():
     if workbook_id not in _workbooks:
         raise Missing("檔案已關閉，請重新上傳")
     run_id = uuid.uuid4().hex[:12]
-    _runs[run_id] = {"recipe": recipe_id, "workbook": workbook_id}
-    while len(_runs) > MAX_RUNS:
-        _runs.pop(next(iter(_runs)))
+    with _state_lock:
+        _runs[run_id] = {"recipe": recipe_id, "workbook": workbook_id}
+        while len(_runs) > MAX_RUNS:
+            _runs.pop(next(iter(_runs)))
     return jsonify(_execute(run_id))
 
 
@@ -546,12 +574,11 @@ def edit_cell(run_id):
     row = _find_row(record["result"], rid)
     review: ReviewStore = record["review"]
     if body.get("revert"):
-        review.set_edit(rid, name, None, None)
+        review.update(lambda r: r.set_edit(rid, name, None, None))
     else:
         value = _typed(column["type"], body.get("value"))
         original = row["edited"][name] if name in row["edited"] else row["raw"].get(name, row["values"].get(name))
-        review.set_edit(rid, name, original, value)
-    review.save()
+        review.update(lambda r: r.set_edit(rid, name, original, value))
     log.info("人工修改 run=%s", run_id)
     return jsonify(_execute(run_id))
 
@@ -594,8 +621,7 @@ def decide_match(run_id):
         if len(rights) > 1 and not match["multi"]:
             raise ValueError(f"{match['name']} 是{match['mode_label']}，左表一列只能對一列")
     review: ReviewStore = record["review"]
-    review.set_match(match["name"], left, rights)
-    review.save()
+    review.update(lambda r: r.set_match(match["name"], left, rights))
     log.info("指定配對 run=%s", run_id)
     return jsonify(_execute(run_id))
 
@@ -605,15 +631,20 @@ def dismiss(run_id):
     record = _run_record(run_id)
     body = _json_body()
     keys = body.get("keys")
-    if not isinstance(keys, list) or not keys or len(keys) > 5000:
+    if not isinstance(keys, list) or not keys or len(keys) > 5000 or not all(isinstance(k, str) for k in keys):
         raise ValueError("請選擇要確認的警示")
+    on = body.get("on", True)
+    if not isinstance(on, bool):
+        raise ValueError("請求內容格式不正確")
     known = {i["key"] for i in record["result"]["issues"]}
-    review: ReviewStore = record["review"]
-    for issue_key in keys:
-        if issue_key in known:
-            review.set_dismissed(issue_key, bool(body.get("on", True)))
-    review.save()
-    return jsonify(_execute(run_id))
+    picked = [k for k in keys if k in known]
+
+    def apply(review: ReviewStore) -> None:
+        for issue_key in picked:
+            review.set_dismissed(issue_key, on)
+
+    record["review"].update(apply)
+    return jsonify(_refresh_dismissed(run_id))
 
 
 @app.post("/api/runs/<run_id>/mapping")
@@ -653,15 +684,19 @@ def export_run(run_id):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     stem = Path(_workbooks.get(record["workbook"], {}).get("name", "data")).stem
     name = _safe_name(f"{stem}_{result['recipe']['id']}_{stamp}.xlsx")
-    path = export_excel(result, paths.OUTPUT / name)
+    buffer = io.BytesIO()   # 直接送到瀏覽器下載，不在 workspace 另存一份
+    export_excel(result, buffer)
+    buffer.seek(0)
     log.info("匯出 run=%s rows=%d", run_id, len(result["output"]["rows"]))
-    return send_file(path, as_attachment=True, download_name=name)
+    return send_file(buffer, as_attachment=True, download_name=name,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ---------- 啟動與自動結束 ----------
 
 def _busy() -> bool:
-    return any(not job.get("finished", True) for job in _jobs.values())
+    with _state_lock:
+        return bool(_jobs)
 
 
 def _shutdown(reason: str) -> None:

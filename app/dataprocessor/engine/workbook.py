@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from .textnorm import key
 
 HEADER_SCAN_ROWS = 30
 MAX_ROWS = 200_000
+MAX_UNZIPPED = 1024 * 1024 * 1024   # xlsx 是 zip：解壓後超過 1 GB 就不讀，避免一個小檔吃光記憶體
+MAX_RATIO = 200                      # 單一檔案的壓縮比；正常的工作表遠低於這個值
 
 
 @dataclass
@@ -44,7 +47,23 @@ def cell_text(value: object) -> str | None:
     return text if text.strip() != "" else None
 
 
+def check_archive(path: Path) -> None:
+    """讀之前先看 zip 的目錄：解壓後的大小與壓縮比異常就拒絕，不用真的解開。"""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+    except zipfile.BadZipFile:
+        raise ValueError("這不是有效的 Excel 檔案") from None
+    total = sum(m.file_size for m in members)
+    if total > MAX_UNZIPPED:
+        raise ValueError("這個 Excel 解壓後超過 1 GB，請先拆檔")
+    for member in members:
+        if member.file_size > 10 * 1024 * 1024 and member.file_size > MAX_RATIO * max(member.compress_size, 1):
+            raise ValueError("這個 Excel 的內容異常（壓縮比過高），可能已損毀，請重新另存後再試")
+
+
 def read_workbook(path: Path) -> list[Sheet]:
+    check_archive(path)
     book = load_workbook(path, read_only=True, data_only=True)
     try:
         sheets = []

@@ -13,7 +13,7 @@ LOCAL = {"Origin": "http://localhost", "Sec-Fetch-Site": "same-origin"}
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    for name in ("RECIPES", "MAPPINGS", "REVIEWS", "UPLOADS", "SCRATCH", "OUTPUT", "SAMPLES"):
+    for name in ("RECIPES", "MAPPINGS", "REVIEWS", "UPLOADS", "SCRATCH", "SAMPLES"):
         monkeypatch.setattr(server.paths, name, tmp_path / name.lower())
     server.paths.RECIPES.mkdir()
     return server.app.test_client()

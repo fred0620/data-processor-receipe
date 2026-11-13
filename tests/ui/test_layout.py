@@ -63,7 +63,8 @@ def _drag(page, selector, dx):
 
 
 def test_panes_resize_collapse_and_remember(ui):
-    ui.context.pages[0].set_viewport_size({"width": 1600, "height": 900})
+    # 夠寬，細節加寬後中間仍有 900px，左欄不會被暫時收起（太窄時的行為見 test_fit）
+    ui.context.pages[0].set_viewport_size({"width": 1920, "height": 900})
     page = ui.run_sample()
     width = lambda sel: round(page.locator(sel).bounding_box()["width"])   # noqa: E731
     side = width(".setup")
@@ -88,7 +89,8 @@ def test_panes_resize_collapse_and_remember(ui):
     assert width(".setup") == 288
     ui.row("INV-1003").click()
     assert abs(width("#drawer") - (drawer + 200)) <= 4
-    # 左欄可以收起，結果變寬
+    # 左欄可以收起，結果變寬（先關掉細節：細節開著又太窄時，左欄本來就會暫時收起，見 test_fit）
+    page.click("#drawerClose")
     result = width("#result")
     page.click("#sideToggle")
     assert width(".setup") == 0 and width("#result") > result + 200

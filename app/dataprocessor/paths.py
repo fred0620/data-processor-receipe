@@ -21,7 +21,6 @@ APP = Path(__file__).resolve().parent.parent
 HOME = Path(os.environ.get("APP_HOME") or APP.parent).resolve()
 
 WORKSPACE = HOME / "workspace"
-OUTPUT = WORKSPACE / "output"        # 匯出給使用者的檔案
 LOGS = WORKSPACE / "logs"            # 操作與錯誤紀錄，不含資料內容
 UPLOADS = WORKSPACE / "uploads"      # 暫存，結束時清除
 SCRATCH = UPLOADS / "scratch"        # 載入資料到 DuckDB 時的暫存檔，用完立刻刪除
@@ -45,5 +44,5 @@ def prepare() -> None:
         seed = EXAMPLES / "workspace"
         if seed.is_dir():
             shutil.copytree(seed, WORKSPACE, dirs_exist_ok=True)
-    for folder in (OUTPUT, LOGS, RECIPES, MAPPINGS, REVIEWS):
+    for folder in (LOGS, RECIPES, MAPPINGS, REVIEWS):
         folder.mkdir(parents=True, exist_ok=True)

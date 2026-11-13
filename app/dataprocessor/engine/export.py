@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from pathlib import Path
+from typing import BinaryIO
 
 from openpyxl import Workbook
 from openpyxl.comments import Comment
@@ -57,7 +58,8 @@ def _widths(sheet) -> None:
         sheet.column_dimensions[get_column_letter(column[0].column)].width = min(max(longest + 2, 8), 60)
 
 
-def export(result: dict, path: Path) -> Path:
+def export(result: dict, path: Path | BinaryIO) -> Path | BinaryIO:
+    """path 可以是檔案路徑，或 BytesIO 之類的串流（直接送給瀏覽器下載，不落地）。"""
     book = Workbook()
     issues = result["issues"]
     output = result["output"]
@@ -151,6 +153,7 @@ def export(result: dict, path: Path) -> Path:
             _text(sheet.cell(row=r, column=4), "、".join(entry["places"]))
         _widths(sheet)
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(path, Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
     book.save(path)
     return path
