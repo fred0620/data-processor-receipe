@@ -15,12 +15,11 @@ LOCAL = {"Origin": "http://localhost", "Sec-Fetch-Site": "same-origin"}
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    for name in ("RECIPES", "MAPPINGS", "REVIEWS", "UPLOADS", "SCRATCH", "OUTPUT", "SAMPLES"):
+    for name in ("RECIPES", "MAPPINGS", "REVIEWS", "UPLOADS", "SCRATCH", "SAMPLES"):
         monkeypatch.setattr(server.paths, name, tmp_path / name.lower())
     server.paths.RECIPES.mkdir()
     server.paths.MAPPINGS.mkdir()
     server.paths.REVIEWS.mkdir()
-    server.paths.OUTPUT.mkdir()
     return server.app.test_client()
 
 
@@ -72,7 +71,6 @@ def test_demo_does_not_pollute_workspace_and_clears(client):
     assert exported.status_code == 200 and exported.data[:2] == b"PK"
     cd = exported.headers.get("Content-Disposition", "")
     assert "示範_" in cd or "%E7%A4%BA%E7%AF%84_" in cd
-    assert any(p.name.startswith("示範_") for p in server.paths.OUTPUT.glob("*.xlsx"))
 
     # 練習 recipe 存在暫存空間，使用者的同名 recipe 不受影響
     user_practice = server.paths.RECIPES / "practice-invoice.yaml"

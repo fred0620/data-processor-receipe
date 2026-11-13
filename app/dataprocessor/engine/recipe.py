@@ -6,6 +6,12 @@ recipe 是 YAML，只描述資料怎麼處理，不含 Python。檢查時把所�
 from __future__ import annotations
 
 import re
+try:  # 正規表達式的語法樹，用來檢查危險的寫法
+    import re._parser as _sre
+except ImportError:  # pragma: no cover  Python 3.10 以前
+    import sre_parse as _sre
+_POSSESSIVE = getattr(_sre, "POSSESSIVE_REPEAT", object())
+_ATOMIC = getattr(_sre, "ATOMIC_GROUP", object())
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -438,10 +444,41 @@ def _regex(check: _Checker, value: Any, where: str) -> re.Pattern | None:
     if text is None:
         return None
     try:
-        return re.compile(text)
+        compiled = re.compile(text)
     except re.error as exc:
         check.fail(where, f"正規表達式錯誤：{exc}")
         return None
+    if _nested_repeat(_sre.parse(text)):
+        check.fail(where, "正規表達式有「重複裡面又重複」的寫法（例如 (a+)+），遇到某些內容會算到卡住，"
+                          "請改寫成只重複一層")
+        return None
+    return compiled
+
+
+def _nested_repeat(items, inside: bool = False) -> bool:
+    """找出 (a+)+、(\\w*)* 這種巢狀的無上限重複。Python 的 re 沒有時間上限，這種寫法遇到不符合的長字串
+    會回溯到卡住，執行中又會鎖住其他處理，所以存 recipe 時就擋下。"""
+    for op, arg in items:
+        if op in (_sre.MAX_REPEAT, _sre.MIN_REPEAT, _POSSESSIVE):
+            low, high, body = arg
+            unbounded = high == _sre.MAXREPEAT or high > 100
+            if op != _POSSESSIVE and inside and unbounded:
+                return True
+            if _nested_repeat(body, inside or (unbounded and op != _POSSESSIVE)):
+                return True
+        elif op == _sre.SUBPATTERN:
+            if _nested_repeat(arg[-1], inside):
+                return True
+        elif op == _sre.BRANCH:
+            if any(_nested_repeat(branch, inside) for branch in arg[1]):
+                return True
+        elif op in (_sre.ASSERT, _sre.ASSERT_NOT):
+            if _nested_repeat(arg[1], inside):
+                return True
+        elif op == _ATOMIC:
+            if _nested_repeat(arg, False):
+                return True
+    return False
 
 
 def _extracts(check: _Checker, raw: Any, where: str) -> list[Extract]:

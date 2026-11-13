@@ -516,6 +516,9 @@ def test_tip_after_first_own_run_shows_once(ui):
     # 執行下一次後不再出現
     page.click("#runButton")
     expect(strip).to_be_hidden()
+    # 指令條收起後，細節開著時左欄會暫時收起（0.2.2）；按收起鈕打開左欄再執行
+    if page.locator(".layout.side-auto").count():
+        page.click("#sideToggle")
     page.click("#runButton")
     page.wait_for_timeout(500)
     expect(strip).to_be_hidden()
