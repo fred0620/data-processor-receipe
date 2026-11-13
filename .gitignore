@@ -11,6 +11,7 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 /*.zip
+/*.png
 
 # 介面測試的截圖，給人看，不提交
 /tests/ui/screens/
