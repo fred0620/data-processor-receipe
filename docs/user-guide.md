@@ -113,13 +113,12 @@ recipe 是一份文字檔，寫好「資料怎麼讀、哪些列不要、怎麼�
 | 排除 | 被篩掉的列 |
 | 對照待補 | 還沒補上對照的寫法 |
 
-下載的檔案也會在 `workspace/output` 留一份。
+下載的檔案只存在瀏覽器的下載資料夾，工具不會另外留一份。
 
 ## 3. 檔案與資料安全
 
 | 資料夾 | 內容 |
 |---|---|
-| `workspace/output` | 匯出的檔案 |
 | `workspace/recipes` | 你的 recipe |
 | `workspace/mappings` | 在畫面上補的對照 |
 | `workspace/reviews` | 你的修改、指定的配對、確認過的警示 |

@@ -91,6 +91,18 @@ button { cursor: pointer; }
 .layout.side-collapsed.with-drawer { grid-template-columns: 0 minmax(0, 1fr) var(--drawer-w); }
 
 .layout.side-collapsed .setup { visibility: hidden; border: 0; padding: 0; }
+/* 打開細節後中間太窄時，暫時收起左欄（不改使用者的設定，關掉細節就回來）；再窄就讓細節蓋在表格上 */
+.layout.side-auto { grid-template-columns: 0 minmax(0, 1fr); }
+.layout.side-auto.with-drawer { grid-template-columns: 0 minmax(0, 1fr) var(--drawer-w); }
+.layout.side-auto .setup { visibility: hidden; border: 0; padding: 0; }
+.layout.side-auto #sideSplit { display: none; }
+.layout.drawer-over.with-drawer { grid-template-columns: var(--side-w) minmax(0, 1fr); }
+.layout.drawer-over.side-auto.with-drawer, .layout.drawer-over.side-collapsed.with-drawer { grid-template-columns: 0 minmax(0, 1fr); }
+.layout.drawer-over .drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 6; width: min(var(--drawer-w), 100%);
+  border-left: 0; box-shadow: var(--shadow-float);
+}
+.layout.drawer-over #drawerSplit { display: none; }
 .splitter {
   position: absolute; top: 0; bottom: 0; z-index: 5; width: 7px; margin-left: -3px; cursor: col-resize;
   background: transparent; transition: background-color .12s ease; touch-action: none;
@@ -216,7 +228,10 @@ button .icon, .button .icon { width: 14px; height: 14px; flex: none; fill: none;
 .actions { display: flex; gap: 8px; }
 
 /* ---------- 流程：卡片只放摘要，點開看細節 ---------- */
-.pipeline { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+/* 8 張步驟卡：放得下就一行，放不下排成兩行各 4 張，不會剩一張孤伶伶在第二行 */
+#result { container: result / inline-size; }
+.pipeline { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@container result (min-width: 1040px) { .pipeline { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
 .stage {
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; min-height: 64px; padding: 10px 12px;
   background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
@@ -250,7 +265,7 @@ button .icon, .button .icon { width: 14px; height: 14px; flex: none; fill: none;
 .tabs { display: flex; flex-wrap: wrap; column-gap: 22px; row-gap: 6px; margin: 24px 0 16px; border-bottom: 1px solid var(--ink-3); }
 .tab {
   position: relative; min-height: 0; padding: 0 0 9px; background: none; box-shadow: none; border-radius: 0;
-  color: var(--text); font-size: 13px; font-weight: 500; transition: color .2s ease;
+  color: var(--text); font-size: 13px; font-weight: 500; white-space: nowrap; transition: color .2s ease;
 }
 .tab:hover:not(:disabled) { background: none; color: var(--text-strong); }
 .tab:active:not(:disabled) { transform: none; }
@@ -303,9 +318,12 @@ table.grid { border-collapse: separate; border-spacing: 0; width: max-content; m
 .grid tbody tr { cursor: pointer; }
 .grid tbody tr:hover td { background: var(--ink-1); }
 .grid tr.selected td { background: var(--accent-soft); }
-.grid td.cell-review, .grid tr:hover td.cell-review { background: var(--warning-soft); }
-.grid td.cell-notice { background: var(--ink-1); }
-.grid td.cell-edited, .grid tr:hover td.cell-edited { background: var(--accent-soft); }
+.grid tr.selected td.status-col { box-shadow: inset 2px 0 0 var(--accent); }
+/* 選到的列也要看得出是哪一格有問題：格子的標記蓋過選取的底色 */
+.grid td.cell-review, .grid tr:hover td.cell-review, .grid tr.selected td.cell-review { background: var(--warning-soft); }
+.grid tr.selected td.cell-review { box-shadow: inset 0 0 0 1px var(--warning); }
+.grid td.cell-notice, .grid tr.selected td.cell-notice { background: var(--ink-1); }
+.grid td.cell-edited, .grid tr:hover td.cell-edited, .grid tr.selected td.cell-edited { background: var(--accent-soft); }
 .grid td.cell-confirmed, .grid tr:hover td.cell-confirmed { background: rgba(59, 130, 246, 0.06); }
 .grid .raw { color: var(--warning-text); font-style: italic; }
 .grid .cell-text { overflow: hidden; text-overflow: ellipsis; }
@@ -530,9 +548,6 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
 button.confirming, button.confirming:hover:not(:disabled) { background: var(--danger); border-color: var(--danger); color: #fff; }
 .busy { cursor: progress; }
 
-@media (max-width: 1280px) {
-  .layout.with-drawer { grid-template-columns: 248px minmax(0, 1fr) 320px; }
-}
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
 
@@ -601,7 +616,7 @@ button.confirming, button.confirming:hover:not(:disabled) { background: var(--da
 .progress[hidden] { display: none; }
 .meter { position: relative; width: 160px; height: 6px; border-radius: var(--radius-pill); background: var(--ink-3); overflow: hidden; }
 .meter i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--accent); transition: width .35s var(--ui); }
-.progress-text { font-size: 12px; color: var(--text); }
+.progress-text { font-size: 12px; color: var(--text); white-space: nowrap; }
 kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px;
   border-radius: 4px; background: var(--ink-2); box-shadow: inset 0 -1px 0 var(--ink-4); font: 500 10.5px/1 var(--mono); color: var(--text); }
 .foot-action { display: flex; align-items: center; gap: 10px; }

@@ -430,10 +430,10 @@ def test_run_continues_when_validate_memory_cannot_be_saved(env, monkeypatch):
     review.save()
     tried = []
 
-    def refuse(self):
+    def refuse(self, *_args):
         tried.append(1)
         raise PermissionError(5, "denied")
 
-    monkeypatch.setattr(ReviewStore, "save", refuse)
+    monkeypatch.setattr(ReviewStore, "set_flagged", refuse)
     result, _, _ = env()                                              # 驗證紀錄存不了，結果照樣出來
     assert tried and result["status"] in ("review", "ok") and result["output"]["rows"]

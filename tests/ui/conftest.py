@@ -27,7 +27,7 @@ SCREENS = Path(__file__).resolve().parent / "screens"
 
 @pytest.fixture()
 def base_url(tmp_path, monkeypatch):
-    for name in ("RECIPES", "MAPPINGS", "REVIEWS", "UPLOADS", "SCRATCH", "OUTPUT"):
+    for name in ("RECIPES", "MAPPINGS", "REVIEWS", "UPLOADS", "SCRATCH"):
         monkeypatch.setattr(server.paths, name, tmp_path / name.lower())
     server.paths.RECIPES.mkdir()
     shutil.copy(EXAMPLES / "recipes" / "invoice-declaration.yaml", server.paths.RECIPES)

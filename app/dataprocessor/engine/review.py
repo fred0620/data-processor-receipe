@@ -55,14 +55,33 @@ class ReviewStore:
 
     def __init__(self, root: Path, recipe_id: str, workbook_hash: str):
         self.path = root / recipe_id / f"{workbook_hash}.json"
-        self.data = _read(self.path, {})
-        self.data.setdefault("edits", {})      # rid → 欄位 → {original, value}
-        self.data.setdefault("matches", {})    # 配對名稱 → 左表 rid → 右表 rid 清單（空清單代表確定沒有配對）
-        self.data.setdefault("dismissed", [])  # 確認過、不用再提醒的警示
+        self.data = self._load()
+
+    def _load(self) -> dict:
+        data = _read(self.path, {})
+        data.setdefault("edits", {})      # rid → 欄位 → {original, value}
+        data.setdefault("matches", {})    # 配對名稱 → 左表 rid → 右表 rid 清單（空清單代表確定沒有配對）
+        data.setdefault("dismissed", [])  # 確認過、不用再提醒的警示
+        return data
 
     def save(self) -> None:
         with _lock:
             _write(self.path, self.data)
+
+    def update(self, change) -> None:
+        """改人工決定一律走這裡：在鎖裡重新讀檔、套上這次的改變、立刻寫回。
+        同一個檔案開在兩個分頁（兩次執行）時，各自手上的舊資料不會互相蓋掉對方的決定。"""
+        with _lock:
+            self.data = self._load()
+            change(self)
+            _write(self.path, self.data)
+
+    def set_flagged(self, name: str, rids: list[str]) -> None:
+        """執行時記下被驗證規則標記過的列。只改這一項並重新讀檔，不會用手上的舊資料蓋掉別的分頁剛做的決定。"""
+        with _lock:
+            fresh = self._load()
+            fresh.setdefault("flagged", {})[name] = rids
+            _write(self.path, fresh)
 
     @property
     def backup(self) -> Path:
@@ -77,19 +96,28 @@ class ReviewStore:
         """清掉這個檔案的人工決定，從頭再檢查一次。清之前先留一份，可以復原。
         補上的對照表跟著 recipe，其他檔案也在用，不在這裡清。"""
         with _lock:
-            _write(self.backup, self.data)
+            self.data = self._load()
+            if self.count():   # 沒有決定可清時不碰備份，免得把上一次能復原的內容蓋成空的
+                _write(self.backup, self.data)
             self.data = {"edits": {}, "matches": {}, "dismissed": []}
             _write(self.path, self.data)
 
     def restore(self) -> bool:
-        """回到重設之前。只能復原最近一次重設。"""
+        """回到重設之前。只能復原最近一次重設。重設之後又做的決定會保留，同一格兩邊都有時以新的為準。"""
         with _lock:
             saved = _read(self.backup, {})
             if not saved:
                 return False
-            self.data = saved
-            for name, default in (("edits", {}), ("matches", {}), ("dismissed", [])):
-                self.data.setdefault(name, default)
+            current = self._load()
+            merged = {"edits": {}, "matches": {}, "dismissed": []}
+            for source in (saved, current):
+                for rid, cells in (source.get("edits") or {}).items():
+                    merged["edits"].setdefault(rid, {}).update(cells)
+                for name, rows in (source.get("matches") or {}).items():
+                    merged["matches"].setdefault(name, {}).update(rows)
+            merged["dismissed"] = sorted({*(saved.get("dismissed") or []), *current["dismissed"]})
+            merged["flagged"] = {**(saved.get("flagged") or {}), **(current.get("flagged") or {})}
+            self.data = merged
             _write(self.path, self.data)
             self.backup.unlink(missing_ok=True)
             return True
@@ -132,17 +160,18 @@ class MappingStore:
         return list(self.data.get("_values", {}).get(table, []))
 
     def add(self, table: str, raw: str, target: str | None, new_value: bool = False) -> None:
-        entries = self.data.setdefault(table, {})
-        if target is None:
-            entries.pop(key(raw), None)
-        else:
-            entries[key(raw)] = {"raw": raw, "target": target}
-            if new_value:
-                extra = self.data.setdefault("_values", {}).setdefault(table, [])
-                if target not in extra:
-                    extra.append(target)
-        self._prune(table)
-        with _lock:
+        with _lock:   # 重新讀檔再改，兩個請求同時補對照時不會只留下一筆
+            self.data = _read(self.path, {})
+            entries = self.data.setdefault(table, {})
+            if target is None:
+                entries.pop(key(raw), None)
+            else:
+                entries[key(raw)] = {"raw": raw, "target": target}
+                if new_value:
+                    extra = self.data.setdefault("_values", {}).setdefault(table, [])
+                    if target not in extra:
+                        extra.append(target)
+            self._prune(table)
             _write(self.path, self.data)
 
     def _prune(self, table: str) -> None:
