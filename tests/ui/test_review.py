@@ -290,9 +290,20 @@ def test_validate_issue_shows_values(ui):
     issue = page.locator("#drawer .issue:has-text('發票金額和報關金額不同')")
     values = issue.locator(".issue-values")
     assert values.inner_text().split() == ["金額", "2,000", "報關金額", "2,100"]
+    # 「怎麼判斷的」：展開這一列的處理過程，寫出規則與用到的每個值
+    issue.locator("button:has-text('怎麼判斷的')").click()
+    story = page.locator("#drawer .row-trace")
+    expect(story).to_have_attribute("open", "")
+    step = story.locator("li:has-text('發票金額和報關金額不同')")
+    expect(step).to_contain_text("規則：「報關金額」不是空白 且 絕對值(「金額」-「報關金額」) > 0.01")
+    expect(step).to_contain_text("這一列：金額 2,000、報關金額 2,100")
+    expect(step).to_be_in_viewport()
+    expect(step).to_have_class("trace-focus")
+    ui.shot("validate-trace")
     page.click(".tab:has-text('所有警示')")
     listed = page.locator(".issue-row:has-text('發票金額和報關金額不同')").first
     assert "金額 2,000" in listed.locator(".issue-values").inner_text()
+    assert listed.locator("button:has-text('怎麼判斷的')").count() == 0, "所有警示不放，點列號到細節看"
     ui.shot("issue-values")
     # 修改成一樣之後通過檢查，留下的紀錄顯示現在的值
     page.click(".tab:has-text('結果')")

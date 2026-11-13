@@ -135,6 +135,7 @@ class _Run:
         self.check_hits: list[set[str]] = []                # 每條驗證規則標記到的列
         self.out_trail: dict[tuple[str, str], str] = {}     # 輸出欄位套對照表的經過
         self.check_info: list[dict] = []                    # 每條驗證規則（給流程卡片列出並連到警示）
+        self.check_values: list[dict[str, list]] = []       # 每條驗證規則：標記到的列，規則用到的欄位當時的值（給「處理過程」）
         self.upstream = self._plan_edits()             # rid → 輸入欄位 → (輸出欄位, 修改紀錄)
         self.applied: dict[tuple[str, str], object] = {}  # 已在輸入階段套用的修改 (rid, 輸出欄位) → 原值
 
@@ -686,6 +687,21 @@ class _Run:
             self.stage("transform", "沒有設定計算步驟")
         self.summary("transform", f"{len(self.recipe.transform)} 個步驟" if self.recipe.transform else "未設定")
 
+    def _check_values(self, box: Sandbox, table: str, condition: str, rids: set[str], where: str) -> dict[str, list]:
+        """規則用到的欄位在這些列的值，讓人照著規則自己算算看。只取標記到的列與修改後通過的列。"""
+        if not rids:
+            return {}
+        text = re.sub(r"'(?:[^']|'')*'", "''", condition)   # 引號裡的文字不算欄位
+        used = [c for c in box.columns(table) if c != "_rid"
+                and re.search(rf'(?<![\w."]){re.escape(c)}(?![\w"])|"{re.escape(c)}"', text)]
+        if not used:
+            return {}
+        out: dict[str, list] = {}
+        for record in box.query(f"SELECT _rid, {', '.join(quote(c) for c in used)} FROM {quote(table)} "
+                                f"WHERE _rid IN (SELECT unnest(?))", where, [sorted(rids)]):
+            out[record[0]] = list(zip(used, record[1:]))
+        return out
+
     def validate(self, box: Sandbox) -> None:
         for i, check in enumerate(self.recipe.validate):
             table = check.table or self.recipe.output.source
@@ -703,6 +719,7 @@ class _Run:
             memory = self.review.data.setdefault("flagged", {})
             remembered = f"{table}|{check.message}"
             fixed = [rid for rid in memory.get(remembered, []) if rid not in hits and self._edited(rid)]
+            self.check_values.append(self._check_values(box, table, check.where, hits | set(fixed), where))
             for rid in fixed:
                 self.issues.append(Issue(check.level, "validate", f"check{i}", check.message, rid=rid, table=table,
                                          out_columns=list(check.highlight), resolved="edited",

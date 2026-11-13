@@ -942,6 +942,9 @@ function issueLine(issue, extra = null, inline = false) {
   if (issue.code === "unmapped" && !issue.resolved && !(inline && entry)) {
     actions.push(el("button", { type: "button", class: "link", text: "補對照", onclick: () => goTo({ tab: "mapping" }) }));
   }
+  if (inline && issue.stage === "validate" && state.selected) {   // 細節裡：展開處理過程，看規則和用到的每個值
+    actions.push(el("button", { type: "button", class: "link", text: "怎麼判斷的", onclick: () => showRowTrace(issue.message) }));
+  }
   if (extra) actions.push(extra);
   if (issue.level !== "error" && !issue.resolved) {   // 修改、補對照、配對要到原本的地方還原
     actions.push(el("button", {
@@ -1099,6 +1102,14 @@ function sourceSection(row) {
 }
 
 /* 執行紀錄：要看的時候才向程式要，同一次執行內記著不重複要 */
+/* 打開這一列的處理過程，讀好之後捲到那條規則：規則與用到的值寫在裡面 */
+let traceFocus = null;
+function showRowTrace(message) {
+  traceFocus = message;
+  state.openTrace.add(`${state.selected}\u0000*`);
+  renderDrawer();
+}
+
 function traceList(row, pick) {
   const box = el("ol", { class: "trace" });
   /* 「　」開頭的是上一步的補充，併進同一點，編號才會連續 */
@@ -1109,6 +1120,12 @@ function traceList(row, pick) {
       else items.push([line.trim()]);
     }
     put(box, items.map(([head, ...rest]) => el("li", {}, head, rest.map((more) => el("div", { class: "sub", text: more })))));
+    const focus = traceFocus && [...box.children].find((li) => li.textContent.includes(`「${traceFocus}」`));
+    if (focus) {
+      traceFocus = null;
+      focus.classList.add("trace-focus");
+      requestAnimationFrame(() => focus.scrollIntoView({ block: "center" }));
+    }
   };
   const cached = state.traces[row.rid];
   if (cached) {

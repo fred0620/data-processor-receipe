@@ -50,6 +50,24 @@ def _match_story(match: dict, decision: dict) -> list[str]:
     return lines
 
 
+class _Shown:
+    """驗證規則裡的欄位：結果表上有這一欄就用結果表的名稱，和細節、警示上看到的一致。"""
+
+    def __init__(self, recipe, names: _Names):
+        self.names = names
+        self.output = {c.expr.strip('"'): c.name for c in recipe.output.columns if c.expr.startswith('"')}
+        self.everything = {**names.everything, **self.output}
+
+    def column(self, table, name: str) -> str:
+        return self.output.get(name) or self.names.column(table, name)
+
+    def table(self, name: str) -> str:
+        return self.names.table(name)
+
+    def __getattr__(self, attr):   # humanize 用到的其他屬性照舊
+        return getattr(self.names, attr)
+
+
 def trace(job, result: dict, row: dict) -> dict:
     recipe = job.recipe
     names = _Names(recipe)
@@ -58,6 +76,7 @@ def trace(job, result: dict, row: dict) -> dict:
     spec = recipe.inputs.get(table)
     matches = {m["name"]: m for m in result["matches"]}
 
+    shown = _Shown(recipe, names)
     steps: list[str] = []
     if spec:
         where = f"工作表「{row['sheet']}」第 {row['row']} 列" if row.get("sheet") else f"第 {row['row']} 列"
@@ -72,7 +91,12 @@ def trace(job, result: dict, row: dict) -> dict:
         if i < len(job.check_hits):
             hit = root in job.check_hits[i]
             level = {"review": "需檢查", "notice": "提示"}[check.level]
+            values = job.check_values[i].get(root) if i < len(job.check_values) else None
             steps.append(f"檢查「{check.message}」：" + (f"有 → 標記{level}" if hit else "沒問題"))
+            if values:   # 標記過的列：寫出規則和用到的值，讓人自己算算看
+                table = check.table or recipe.output.source
+                steps.append(f"　規則：{humanize(check.where, shown, table)}")
+                steps.append("　這一列：" + "、".join(f"{shown.column(table, c)} {_display(v)}" for c, v in values))
 
     columns: dict[str, list[str]] = {}
     for column in recipe.output.columns:

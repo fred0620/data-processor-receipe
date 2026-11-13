@@ -662,3 +662,6 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .issue-values { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 3px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .issue-value b { font-weight: 600; color: var(--text-strong); }
 .issue.dismissed .issue-value b { font-weight: 500; color: var(--text); }
+
+/* 從警示「怎麼判斷的」打開時，標出那條規則 */
+.trace li.trace-focus { background: var(--ink-1); border-radius: 6px; box-shadow: -8px 0 0 var(--ink-1), 8px 0 0 var(--ink-1); }

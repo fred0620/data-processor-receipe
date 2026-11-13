@@ -119,6 +119,18 @@ def test_row_trace(client):
     assert any("AIr" in s and "AIR" in s for s in trace["columns"]["運送方式"])
     assert trace["columns"]["報單號碼"][0] == "從配到的報關單 AA15A0002（第 3 列）帶過來"
     assert trace["columns"]["台幣金額"][0] == "在計算步驟「換算台幣」算出"
+    # 驗證標記到的列：寫出規則與規則用到的每個欄位的值
+    flagged = client.get(f"/api/runs/{result['run_id']}/trace?rid=invoice:6", headers=LOCAL).json["steps"]
+    at = flagged.index("檢查「發票金額和報關金額不同」：有 → 標記需檢查")
+    assert flagged[at + 1] == "　規則：「報關金額」不是空白 且 絕對值(「金額」-「報關金額」) > 0.01"
+    assert flagged[at + 2] == "　這一列：金額 2,000、報關金額 2,100"
+    passed = trace["steps"]   # invoice:5 沒被標記：不列數值
+    assert "檢查「發票金額和報關金額不同」：沒問題" in passed and not any(s.startswith("　這一列") for s in passed)
+    # 人工修改後通過：留下紀錄的列也寫出現在的值
+    client.post(f"/api/runs/{result['run_id']}/edit", json={"rid": "invoice:6", "column": "金額", "value": "2100"},
+                headers=LOCAL)
+    fixed = client.get(f"/api/runs/{result['run_id']}/trace?rid=invoice:6", headers=LOCAL).json["steps"]
+    assert "　這一列：金額 2,100、報關金額 2,100" in fixed
     missing = client.get(f"/api/runs/{result['run_id']}/trace?rid=nope", headers=LOCAL)
     assert missing.status_code == 404
 
