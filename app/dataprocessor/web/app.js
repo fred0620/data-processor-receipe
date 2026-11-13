@@ -914,6 +914,25 @@ function inlineMapping(entry) {
     entry.count > 1 ? el("span", { class: "muted", text: `其他 ${entry.count - 1} 處也會一起補上` }) : null);
 }
 
+/* 驗證警示帶上相關欄位現在的值（recipe 的 highlight），不用點開細節就能自己算算看。
+   值取自結果列，修改後重新執行就會更新。 */
+const issueRows = new WeakMap();
+function issueValues(issue) {
+  if (issue.stage !== "validate" || !issue.out_columns?.length) return null;
+  const r = state.result;
+  if (!issueRows.has(r)) {
+    const map = new Map();
+    for (const row of r.output.rows) for (const i of row.issues) map.set(i, row);
+    issueRows.set(r, map);
+  }
+  const row = issueRows.get(r).get(r.issues.indexOf(issue));
+  if (!row) return null;
+  const types = Object.fromEntries(r.output.columns.map((c) => [c.name, c.type]));
+  return el("div", { class: "issue-values" }, issue.out_columns.map((name) => el("span", { class: "issue-value" },
+    el("span", { class: "muted", text: name }), " ",
+    el("b", { text: row.values[name] === null || row.values[name] === undefined || row.values[name] === "" ? "（空白）" : fmt(row.values[name], types[name]) }))));
+}
+
 function issueLine(issue, extra = null, inline = false) {
   const actions = [];
   if (issue.ref && issue.rid && state.result.matches.some((m) => m.name === issue.ref)) {
@@ -933,6 +952,7 @@ function issueLine(issue, extra = null, inline = false) {
   return el("div", { class: `issue ${issue.dismissed ? "dismissed" : issue.level}` },
     el("span", { class: `dot ${issue.level}` }),
     el("div", { class: "body" }, el("div", { class: "message", text: issue.message }),
+      issueValues(issue),
       issue.note ? el("div", { class: "resolution", text: `→ ${issue.note}` }) : null,
       inline && entry ? inlineMapping(entry) : null,
       el("div", { class: "issue-actions" }, el("span", { class: "meta", text: `${STAGE_TEXT[issue.stage] || issue.stage}${issue.dismissed ? `・${handledText(issue)}` : ""}` }), actions)));

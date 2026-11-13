@@ -259,7 +259,7 @@ validate:
     where: "decl_amount IS NOT NULL AND abs(amount - decl_amount) > 0.01"   # 成立的列是有問題的列
     message: 發票金額和報關金額不同
     level: review                   # review（需檢查，預設）或 notice（提示，不影響狀態）
-    highlight: [金額, 報關金額]      # 標在哪些輸出欄位（用輸出的顯示名稱）
+    highlight: [金額, 報關金額]      # 標在哪些輸出欄位（用輸出的顯示名稱），警示上也會列出這些欄位的值
 ```
 
 ## output：輸出

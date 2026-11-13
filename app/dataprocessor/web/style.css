@@ -657,3 +657,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .source-grid tr.m-skip td.mark { color: var(--text-faint); }
 .match-legend { margin: -6px 0 10px; }
 .match-legend .open-count { color: var(--warning-text); font-weight: 600; }
+
+/* 驗證警示的相關數值：欄名淡、數值粗，一行排開 */
+.issue-values { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 3px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.issue-value b { font-weight: 600; color: var(--text-strong); }
+.issue.dismissed .issue-value b { font-weight: 500; color: var(--text); }

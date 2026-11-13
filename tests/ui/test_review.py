@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import openpyxl
+from playwright.sync_api import expect
 
 
 def test_stage_cards_link_to_rows(ui):
@@ -280,3 +281,28 @@ def test_search_keeps_typing(ui):
     picker.click()
     _type_slowly(picker, "AA15A0003")
     assert picker.input_value() == "AA15A0003" and page.evaluate("document.activeElement === document.querySelectorAll('.match-card input.search')[0] || document.activeElement.closest('.match-card') !== null")
+
+
+def test_validate_issue_shows_values(ui):
+    """驗證警示帶上相關欄位現在的值：細節、所有警示都看得到，不用點開欄位自己找；修改後顯示新的值。"""
+    page = ui.run_sample()
+    ui.row("INV-1003").click()
+    issue = page.locator("#drawer .issue:has-text('發票金額和報關金額不同')")
+    values = issue.locator(".issue-values")
+    assert values.inner_text().split() == ["金額", "2,000", "報關金額", "2,100"]
+    page.click(".tab:has-text('所有警示')")
+    listed = page.locator(".issue-row:has-text('發票金額和報關金額不同')").first
+    assert "金額 2,000" in listed.locator(".issue-values").inner_text()
+    ui.shot("issue-values")
+    # 修改成一樣之後通過檢查，留下的紀錄顯示現在的值
+    page.click(".tab:has-text('結果')")
+    ui.row("INV-1003").click()
+    amount = ui.field("金額").locator("input")
+    amount.fill("2100")
+    amount.press("Enter")
+    ui.settle()
+    resolved = page.locator("#drawer .issue:has-text('發票金額和報關金額不同')")
+    expect(resolved.locator(".issue-values .issue-value").first).to_contain_text("2,100")
+    # 不是驗證的警示不加數值
+    assert page.locator(".issue:not(:has-text('發票金額和報關金額不同')) .issue-values").count() == \
+        page.locator(".issue:has-text('運送方式不同') .issue-values").count()
