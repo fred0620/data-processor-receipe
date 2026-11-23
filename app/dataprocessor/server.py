@@ -25,6 +25,7 @@ from flask import Flask, Response, jsonify, redirect, request, send_file, send_f
 from werkzeug.exceptions import HTTPException
 
 from . import __version__, engine, logs, paths
+from .engine import labs as lab_engine
 from .engine.explain import explain
 from .engine.trace import trace
 from .engine.export import export as export_excel
@@ -471,6 +472,88 @@ def demo_clear():
     practice.unlink(missing_ok=True)
     log.info("清除範例資料")
     return jsonify({"ok": True})
+
+
+def _get_lab(lab_id: str) -> dict:
+    lab = lab_engine.load_labs(paths.DEMO).get(lab_id)
+    if not lab:
+        raise ValueError("不認得的練習項目")
+    return lab
+
+
+def _run_lab_recipe(lab: dict, recipe_text: str) -> dict:
+    wb_path = paths.DEMO / lab["workbook"]
+    wb = _register_workbook(wb_path, wb_path.name, demo=True)
+    recipe = engine.load_recipe(recipe_text)
+    temp_root = paths.SCRATCH / "demo" / "labs" / uuid.uuid4().hex[:8]
+    review = ReviewStore(temp_root / "reviews", recipe.id, _workbooks[wb["id"]]["hash"])
+    mappings = MappingStore(temp_root / "mappings", recipe.id)
+    keep: dict = {}
+    with _run_lock:
+        result = engine.run(recipe, _workbooks[wb["id"]]["sheets"], review, mappings, paths.SCRATCH, keep)
+    shutil.rmtree(temp_root, ignore_errors=True)
+    run_id = uuid.uuid4().hex[:12]
+    result["run_id"] = run_id
+    result["workbook"] = {"id": wb["id"], "name": wb["name"]}
+    result["decisions"] = 0
+    result["can_restore"] = False
+    result["demo"] = True
+    _runs[run_id] = {"recipe": f"demo:invoice-declaration", "workbook": wb["id"], "demo": True,
+                     "result": result, "review": review, "job": keep.get("job")}
+    while len(_runs) > MAX_RUNS:
+        _runs.pop(next(iter(_runs)))
+    return result
+
+
+@app.get("/api/labs")
+def get_labs():
+    return jsonify({"labs": lab_engine.list_labs(paths.DEMO)})
+
+
+@app.post("/api/labs/<lab_id>/start")
+def start_lab(lab_id):
+    lab = _get_lab(lab_id)
+    template = (paths.DEMO / lab["recipe"]).read_text(encoding="utf-8")
+    merged, _, _ = lab_engine.insert_snippet(template, lab["slot"]["marker"], lab.get("start", ""))
+    result = _run_lab_recipe(lab, merged)
+    wb_sheets = _workbooks[result["workbook"]["id"]]["sheets"]
+    log.info("開始練習 lab=%s", log_text(lab_id))
+    return jsonify({
+        "id": lab["id"],
+        "title": lab["title"],
+        "goal": lab.get("goal", ""),
+        "recipe_text": template,
+        "slot": lab["slot"],
+        "start": lab.get("start", ""),
+        "sample_preview": lab_engine.sample_preview(wb_sheets),
+        "result": result,
+    })
+
+
+@app.post("/api/labs/<lab_id>/try")
+def try_lab(lab_id):
+    lab = _get_lab(lab_id)
+    snippet = str(_json_body().get("snippet", ""))
+    if len(snippet.encode("utf-8")) > 32 * 1024:
+        raise ValueError("片段內容太長")
+    template = (paths.DEMO / lab["recipe"]).read_text(encoding="utf-8")
+    merged, slot_line, snippet_lines = lab_engine.insert_snippet(template, lab["slot"]["marker"], snippet)
+    try:
+        result = _run_lab_recipe(lab, merged)
+    except engine.RecipeError as exc:
+        problems = lab_engine.remap_problem_lines(exc.problems, slot_line, snippet_lines)
+        log.info("練習試算 lab=%s pass=False problems=%d", log_text(lab_id), len(problems))
+        return jsonify({"ok": False, "problems": problems, "checks": [], "result": None})
+    checks = lab_engine.evaluate_checks(result, lab.get("checks", []))
+    passed = all(c["pass"] for c in checks)
+    log.info("練習試算 lab=%s pass=%s checks=%d", log_text(lab_id), passed, len(checks))
+    return jsonify({"ok": passed, "problems": [], "checks": checks, "result": result})
+
+
+@app.get("/api/labs/<lab_id>/answer")
+def lab_answer(lab_id):
+    lab = _get_lab(lab_id)
+    return jsonify({"answer": lab.get("answer", "")})
 
 
 def _stores_for(recipe_id: str, workbook_hash: str, is_demo: bool) -> tuple[ReviewStore, MappingStore]:

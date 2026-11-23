@@ -1,0 +1,46 @@
+recipe: 1
+id: lab-extract
+name: 練習：一格有好幾行，只取需要的那行
+description: 在 item 欄位底下加上 extract，只保留第一行。
+
+inputs:
+  invoice:
+    label: 發票
+    title: [invoice_no]
+    sheet: [發票明細]
+    columns:
+      invoice_no: {aliases: [發票號碼, Invoice No], required: true, text: [trim, halfwidth, upper, no_space]}
+      inv_date: {aliases: [發票日期, 日期], type: date}
+      item:
+        aliases: [品名]
+        required: true
+        # {{slot}}
+      qty: {aliases: [數量], type: integer}
+      amount: {aliases: [金額], type: number, required: true}
+      currency: {aliases: [幣別], text: [trim, halfwidth, upper]}
+      ship_mode: {aliases: [運送方式], map: ship_mode}
+      status: {aliases: [狀態]}
+
+gate:
+  - input: invoice
+    keep: "status IS NULL OR status <> '作廢'"
+    label: 排除作廢發票
+
+mappings:
+  ship_mode:
+    values: [AIR, SEA, EXPRESS]
+    entries:
+      AIR: [空運, 航空, Air freight]
+      SEA: [海運, Ocean]
+      EXPRESS: [快遞, Courier]
+    missing: ask
+
+output:
+  from: invoice
+  sheet: 整理結果
+  order_by: "inv_date, invoice_no"
+  columns:
+    - {name: 發票號碼, from: invoice_no}
+    - {name: 發票日期, from: inv_date, type: date}
+    - {name: 品名, from: item}
+    - {name: 金額, from: amount, type: number}

@@ -1,0 +1,126 @@
+{
+  "labs": [
+    {
+      "id": "lab-gate",
+      "title": "排除不用處理的列",
+      "goal": "把狀態是「作廢」的發票排除，不要進入後面的配對與輸出。",
+      "recipe": "labs/lab-gate.yaml",
+      "workbook": "範例_發票與報關單.xlsx",
+      "slot": { "marker": "# {{slot}}", "label": "gate：要保留哪些列" },
+      "start": "",
+      "answer": "- input: invoice\n  keep: \"status IS NULL OR status <> '作廢'\"\n  label: 排除作廢發票",
+      "checks": [
+        {
+          "type": "excluded",
+          "expected": ["INV-1007"],
+          "how": "狀態為作廢的發票（INV-1007）應該放進排除，其他發票保留"
+        }
+      ]
+    },
+    {
+      "id": "lab-mapping",
+      "title": "各種寫法統一成同一個代碼",
+      "goal": "把「快遞」和「Courier」在 ship_mode 對照表裡統一成 EXPRESS。",
+      "recipe": "labs/lab-mapping.yaml",
+      "workbook": "範例_發票與報關單.xlsx",
+      "slot": { "marker": "# {{slot}}", "label": "entries：新增 EXPRESS 的寫法" },
+      "start": "",
+      "answer": "EXPRESS: [快遞, Courier]",
+      "checks": [
+        {
+          "type": "field",
+          "row": "1004",
+          "column": "運送方式",
+          "expected": "EXPRESS",
+          "how": "發票 1004 寫的是快遞，應該對應成 EXPRESS"
+        },
+        {
+          "type": "issue",
+          "row": "1004",
+          "code": "unmapped",
+          "present": false,
+          "how": "補上對照後，發票 1004 不應再出現「不在對照表」警示"
+        }
+      ]
+    },
+    {
+      "id": "lab-match",
+      "title": "號碼寫法不同也配得到",
+      "goal": "加上第二種比對方式，只比發票號碼的數字部分，讓 1004 配到 INV-1004。",
+      "recipe": "labs/lab-match.yaml",
+      "workbook": "範例_發票與報關單.xlsx",
+      "slot": { "marker": "# {{slot}}", "label": "再找：另一種比對方式" },
+      "start": "",
+      "answer": "- label: 只比數字部分\n  when: \"dp_digits(l.invoice_no) <> ''\"\n  on: \"dp_digits(l.invoice_no) = dp_digits(r.ref_no)\"",
+      "checks": [
+        {
+          "type": "match",
+          "match": "inv_decl",
+          "left": "1004",
+          "right": "AA15A0004",
+          "how": "報關單寫 INV-1004，只比數字才對得上"
+        },
+        {
+          "type": "match",
+          "match": "inv_decl",
+          "left": "INV-1001",
+          "right": "AA15A0001",
+          "how": "原本配得到的不能被改掉"
+        }
+      ]
+    },
+    {
+      "id": "lab-extract",
+      "title": "一格有好幾行，只取需要的那行",
+      "goal": "品名有多行時只取第一行，把規格與保固去掉。",
+      "recipe": "labs/lab-extract.yaml",
+      "workbook": "範例_發票與報關單.xlsx",
+      "slot": { "marker": "# {{slot}}", "label": "item 欄位：只取第一行" },
+      "start": "",
+      "answer": "extract: {line: 1}",
+      "checks": [
+        {
+          "type": "field",
+          "row": "INV-1003",
+          "column": "品名",
+          "expected": "電源供應器 500W",
+          "how": "INV-1003 的品名有三行，用 extract 取第 1 行"
+        },
+        {
+          "type": "field",
+          "row": "INV-1001",
+          "column": "品名",
+          "expected": "不鏽鋼螺絲 M6",
+          "how": "只有一行的品名不能被改掉"
+        }
+      ]
+    },
+    {
+      "id": "lab-validate",
+      "title": "數字對不上時提醒我",
+      "goal": "當發票金額和報關金額相差超過 0.01 時標成需檢查，並標出金額欄位。",
+      "recipe": "labs/lab-validate.yaml",
+      "workbook": "範例_發票與報關單.xlsx",
+      "slot": { "marker": "# {{slot}}", "label": "validate：金額不一致提醒" },
+      "start": "",
+      "answer": "- where: \"decl_amount IS NOT NULL AND abs(amount - decl_amount) > 0.01\"\n  message: 發票金額和報關金額不同\n  highlight: [金額, 報關金額]",
+      "checks": [
+        {
+          "type": "issue",
+          "row": "INV-1003",
+          "stage": "validate",
+          "present": true,
+          "highlight": ["金額"],
+          "how": "INV-1003 金額 2,000、報關金額 2,100，應標出驗證警示並帶 highlight 金額"
+        },
+        {
+          "type": "issue",
+          "row": "INV-1001",
+          "stage": "validate",
+          "present": false,
+          "how": "INV-1001 金額相同，不應該出現驗證警示"
+        }
+      ]
+    }
+  ]
+}

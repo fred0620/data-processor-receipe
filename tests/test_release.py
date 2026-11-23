@@ -81,3 +81,9 @@ def test_build_json_matches_version():
     build = json.loads((ROOT / "app" / "dataprocessor" / "web" / "build.json").read_text(encoding="utf-8"))
     assert build["version"] == build_release.read_version()
 
+
+def test_whatsnew_valid():
+    import check_whatsnew
+    assert check_whatsnew.check() == []
+
+
