@@ -13,8 +13,9 @@
   <h1>資料處理器 <span id="version" class="version"></span></h1>
   <span id="runStatus" class="run-status" hidden></span>
   <button id="popInButton" class="ghost small" type="button" hidden title="關閉這個視窗，回到主視窗" data-icon="popin">Pop in</button>
-  <a class="manual-link" href="/manual" target="_blank" rel="noopener">使用手冊</a>
+  <button id="helpBtn" type="button" class="ghost small help-trigger" aria-haspopup="dialog" aria-expanded="false">說明 ▾<span class="help-dot" hidden></span></button>
 </header>
+<div id="versionBanner" class="version-banner" hidden>工具已更新，關掉所有視窗後重新執行 run.bat</div>
 
 <div class="layout">
   <aside class="setup">
@@ -41,6 +42,9 @@
   </aside>
 
   <main class="work">
+    <div id="guideBar" class="guide-bar" hidden></div>
+    <div id="missionStrip" class="mission-strip" aria-live="polite" aria-atomic="true" hidden></div>
+
     <section id="empty" class="empty">
       <h2>選好 recipe 與資料檔後按「執行」</h2>
       <p class="muted">處理完會顯示每個步驟的結果，有疑慮的地方會標記出來，可以在這裡修正後再下載。</p>
@@ -89,6 +93,7 @@
 </dialog>
 
 <div id="toast" class="toast" role="alert" hidden></div>
+<script src="/web/spotlights.js"></script>
 <script src="/web/app.js"></script>
 </body>
 </html>
