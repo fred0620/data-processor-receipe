@@ -141,3 +141,12 @@
 - 大量資料：寬鬆的相似度比對會讓兩張表互相比較，資料上萬列時要先用等值條件縮小範圍。
 - 整份資料層級的檢查（例如總金額要等於某個數）：目前要用 transform 算出來再 validate。
 - 真實資料的表頭、髒資料型態，以及跟 pdf-mapper 匯出格式的串接方式。
+
+## 新手導覽、練習與新功能（2026-11-24）
+
+- **範例資料放 `app/dataprocessor/demo/`**：不依賴 `workspace/samples` 與 `workspace/recipes`（使用者可能刪掉），隨版本更新，並由 `scripts/make_example.py` 同步產生與測試比對，避免漂移。
+- **範例的決定與對照只放暫存**：範例與練習執行時，`ReviewStore` 與 `MappingStore` 改寫到 `paths.SCRATCH / "demo"`，程式結束或 `/api/demo/clear` 即清除；匯出檔名加「示範_」前綴，不汙染正式資料。
+- **導覽介面用 accent，疊在內容上用深色虛線**：四種狀態色（綠、橘、紅、藍）維持只代表資料狀態，疊在表格或欄位上的內容指示改用深色虛線（`--outline-ink`），避免和「藍色代表你處理過的」混淆；且同一時間浮標、外框、內容虛線最多只出現一種。
+- **對話框內畫導覽**：新增 recipe 使用原生 `<dialog>` 的 `showModal()` 位於瀏覽器 top layer，外面的浮標會被蓋住；關卡 B 在對話框開啟時把精簡指令條 `.dialog-guide` 與 `#guidePointer` 畫進 `#dialog` 內，關閉時移回。
+- **不提供「在目前資料上繼續導覽」**：本工具的人工決定本來就會自動保存，關卡步驟則綁定範例資料的特定列；使用者已有工作時先詢問並記下狀態，走完或結束後按「回到我的工作」用 `GET /api/runs/<id>` 原樣接回。
+- **`returning` 判斷**：從 0.1.0 升上來的使用者沒有 `whatsnewSeen`，由 `/api/status` 檢查 `workspace/reviews`、`workspace/mappings` 或範例以外的 recipe 來判斷 `returning: true`，避免全新使用者一開啟就被新功能小卡打斷。

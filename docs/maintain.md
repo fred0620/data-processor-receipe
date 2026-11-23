@@ -57,8 +57,8 @@ bash run.sh                                # 或 Windows 雙擊 run.bat，用使
 
 ### 步驟
 
-1. 改 `app/pyproject.toml` 的 `version`，然後執行 `uv lock --project app` 讓 `uv.lock` 跟著更新。
-2. 在 `CHANGELOG.md` 最上面加一段 `## 版本號 - 日期`，用使用者看得懂的話條列改了什麼。
+1. 改 `app/pyproject.toml` 的 `version`（同步更新 `app/dataprocessor/web/build.json`），然後執行 `uv lock --project app` 讓 `uv.lock` 跟著更新。
+2. 在 `CHANGELOG.md` 最上面加一段 `## 版本號 - 日期`，用使用者看得懂的話條列改了什麼，並確認新功能導覽已更新（`app/dataprocessor/web/whatsnew.json` 與 `uv run --project app python scripts/check_whatsnew.py`）。
 3. 跑測試，並依 [發版檢查清單](security-checklist.md) 勾選。另外在能連到 pypi.org 的電腦做兩件 CI 做不到的事：
    - 弱點檢查：`python3 scripts/audit.py`（公司鏡像沒有弱點資料庫，所以不放在 CI）
    - 換版測試：在 Windows 電腦執行 `powershell -ExecutionPolicy Bypass -File tests\release\test_update.ps1`（不需要網路；GitLab 的 runner 是 Linux，會顯示略過）

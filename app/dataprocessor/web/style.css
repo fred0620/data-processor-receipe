@@ -725,7 +725,6 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 
 /* 導覽進度列（#guideBar）與指令條（#missionStrip） */
 .guide-bar {
-  position: sticky; top: -28px; z-index: 12;
   display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 12px;
   margin: -28px -32px 0; background: var(--surface); border-bottom: 1px solid var(--line);
   white-space: nowrap; overflow: hidden;
@@ -756,10 +755,9 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .guide-bar-actions button { white-space: nowrap; }
 
 .mission-strip {
-  position: sticky; top: 18px; z-index: 11;
   display: flex; align-items: center; gap: 12px; min-height: 52px;
   margin: 8px -20px 14px; padding: 10px 12px;
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  background: var(--accent-soft);
   border: 1px solid var(--accent-line); border-radius: var(--radius-md);
 }
 .mission-strip.pulse { animation: guide-pulse 700ms var(--ui); }
