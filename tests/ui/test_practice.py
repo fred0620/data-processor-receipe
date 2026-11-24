@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 
+from playwright import sync_api
 from playwright.sync_api import expect
 
 import dataprocessor.server as server
@@ -253,11 +254,15 @@ def test_mission_popout_with_real_second_window(ui):
     expect(_action(page)).to_contain_text("Pop in")
     assert_step_guidance(page)
     _no_skip_button(page)
-    win.click("#popInButton")
+    # 按下 Pop in 後這個視窗會自己關掉：等 close 事件，不在已關閉的頁面上再操作
+    with win.expect_event("close", timeout=5000):
+        try:
+            win.click("#popInButton", no_wait_after=True)
+        except sync_api.Error as error:  # 點擊送出後視窗立刻關掉，click 本身可能回報目標已關閉
+            assert "closed" in str(error), error
     expect(_action(page)).to_have_text("練習完成", timeout=5000)
     assert _state(page, "state.tab") == "rows" and _state(page, "state.selected") == "invoice:6"
     assert page.locator(".tab.away").count() == 0
-    page.wait_for_timeout(500)
     assert win.is_closed()
 
 
@@ -297,6 +302,16 @@ def test_mission_transform_draws_guide_inside_dialog(ui):
     page.wait_for_timeout(300)
     assert page.locator("#dialog #guidePointer").count() == 1
     assert_pointer_text_and_direction(page)
+    assert_step_guidance(page)
+    # 目標是「SQL 原文」那幾個字，不是撐滿對話框寬度的 summary：浮標要貼在字旁邊
+    gap = page.evaluate("""() => {
+      const s = document.querySelector('#dialog details.explain-code > summary');
+      const r = document.createRange(); r.selectNodeContents(s);
+      const t = r.getBoundingClientRect();
+      const p = document.getElementById('guidePointer').getBoundingClientRect();
+      return Math.max(t.left - p.right, p.left - t.right, 0);
+    }""")
+    assert gap < 40, f"浮標離 SQL 原文的字太遠：{gap}px"
     ui.shot("practice-07-transform-dialog")
     page.locator('#dialog .flow-body:has(.flow-text:text-is("計算：換算台幣")) > details.explain-code > summary').click()
     expect(_action(page)).to_have_text("練習完成")
@@ -308,8 +323,8 @@ def test_mission_transform_draws_guide_inside_dialog(ui):
     expect(page.locator("#toast")).to_contain_text("已複製")
 
 
-def _finish_review_journey(page, ui):
-    """用真的點擊走完關卡 A（只為了讓新手導覽的完成畫面出現）；每一步等行動句換了再做下一步。"""
+def _review_to_step8(page, ui):
+    """用真的點擊走完關卡 A 的前 7 步，停在第 8 步（把配對做完）。"""
     page.click('[data-guide="welcome-review"]')
     expect(page.locator("#runButton")).to_be_enabled()
     page.click("#runButton")
@@ -334,6 +349,12 @@ def _finish_review_journey(page, ui):
     page.keyboard.press("Escape")
     expect(_action(page)).to_contain_text("沒有配對")
     page.locator('.match-card:has-text("INV-1008") [data-guide="match-none"]').click()
+    expect(page.locator("#missionStrip .mission-badge")).to_have_text(re.compile(r"^8"))
+
+
+def _finish_review_journey(page, ui):
+    """用真的點擊走完關卡 A（只為了讓新手導覽的完成畫面出現）；每一步等行動句換了再做下一步。"""
+    _review_to_step8(page, ui)
     for _ in range(6):
         expect(_action(page)).to_contain_text(re.compile("INV-|確認無誤"))
         action = _action(page).inner_text()
@@ -343,11 +364,14 @@ def _finish_review_journey(page, ui):
         key = "match-confirm" if "確認正確" in action else "match-none"
         page.locator(f'.match-card:has-text("{invoice}") [data-guide="{key}"]').click()
         expect(_action(page)).not_to_have_text(action)
-    for _ in range(6):
-        if "下載" in _action(page).inner_text():
-            break
-        page.click('[data-guide="confirm-next"]')
-        page.wait_for_timeout(300)
+    # 行動句會寫「還剩 n 列」：等它對上、按鈕可以按了再點，不用 sleep，也不會在畫面重畫時點到舊按鈕
+    remaining = ui.state("state.result.output.rows.filter(r => r.status === 'review').length")
+    for n in range(remaining, 0, -1):
+        expect(_action(page)).to_contain_text(f"剩下 {n} 列")
+        confirm = page.locator('#drawer [data-guide="confirm-next"]')
+        expect(confirm).to_be_enabled()
+        confirm.click()
+    expect(_action(page)).to_contain_text("下載")
     with page.expect_download():
         page.click("#exportButton")
     expect(_action(page)).to_contain_text("核對流程走完了")
@@ -528,3 +552,172 @@ def test_whatsnew_points_to_practice_center(ui):
     page.wait_for_selector("#whatsNewCard", timeout=4000)
     expect(page.locator("#whatsNewCard")).to_contain_text("進階功能練習中心")
     assert json.loads(page.evaluate("JSON.stringify(window.Spotlights.EXTRA_SPOTLIGHTS['practice-center'])"))["target"] == "#helpBtn"
+
+
+def test_review_step8_wrong_choice_shows_warning_and_points_to_undo(ui):
+    """第 8 步：INV-1010 該按「確認正確」，按成「沒有配對」要有 ⚠、指向復原的按鈕，做對才算完成。"""
+    page = ui.open()
+    _review_to_step8(page, ui)
+    expect(_action(page)).to_contain_text("INV-1005")
+    page.locator('.match-card:has-text("INV-1005") [data-guide="match-none"]').click()
+    expect(_action(page)).to_contain_text("INV-1006")
+    page.locator('.match-card:has-text("INV-1006") [data-guide="match-none"]').click()
+    expect(_action(page)).to_contain_text("INV-1010")
+    page.locator('.match-card:has-text("INV-1010") [data-guide="match-none"]').click()
+
+    tip = page.locator("#missionStrip .mission-tip")
+    expect(tip).to_contain_text("⚠")
+    expect(tip).to_contain_text("INV-1010 標成沒有配對了")
+    expect(tip).to_contain_text("AA15A0006")
+    expect(page.locator("#missionStrip .mission-badge")).to_have_text(re.compile(r"^8"))
+    expect(_action(page)).to_contain_text("交回自動")
+    revert = page.locator('.match-card:has-text("INV-1010") [data-guide="match-revert"]')
+    expect(revert).to_be_visible()
+    assert_step_guidance(page)
+    assert pointer_text(page) == "交回自動"
+    ui.shot("practice-14-step8-wrong")
+    revert.click()
+    expect(_action(page)).to_contain_text("INV-1010")
+    expect(_action(page)).to_contain_text("確認正確")
+    expect(tip).not_to_contain_text("⚠")
+    assert_step_guidance(page)
+    page.locator('.match-card:has-text("INV-1010") [data-guide="match-confirm"]').click()
+    expect(page.locator("#missionStrip .mission-badge")).to_have_text(re.compile(r"^9"))
+
+
+def test_review_step8_wrong_manual_pick_for_unmatched_invoice(ui):
+    """INV-1005 其實沒有報關單：手動指定到 AA15A0007 要有 ⚠ 並指回「交回自動」。"""
+    page = ui.open()
+    _review_to_step8(page, ui)
+    card = page.locator('.match-card:has-text("INV-1005")')
+    card.locator('button:has-text("手動指定")').click()
+    card.locator('button:has-text("選這筆")').first.click()
+    tip = page.locator("#missionStrip .mission-tip")
+    expect(tip).to_contain_text("⚠")
+    expect(tip).to_contain_text("INV-1005 被指定配對到")
+    expect(tip).to_contain_text("沒有對應的報關單")
+    expect(page.locator('.match-card:has-text("INV-1005") [data-guide="match-revert"]')).to_be_visible()
+    assert_step_guidance(page)
+    page.locator('.match-card:has-text("INV-1005") [data-guide="match-revert"]').click()
+    expect(tip).not_to_contain_text("⚠")
+    expect(_action(page)).to_contain_text("INV-1005")
+
+
+def test_review_step9_invalid_amount_warns_in_strip(ui):
+    """第 9 步：金額輸入 abc 存不進去，指令條要有 ⚠；改回數字後提示消失。"""
+    page = ui.open()
+    _review_to_step8(page, ui)
+    for inv, key in (("INV-1005", "match-none"), ("INV-1006", "match-none"), ("INV-1010", "match-confirm")):
+        expect(_action(page)).to_contain_text(inv)
+        page.locator(f'.match-card:has-text("{inv}") [data-guide="{key}"]').click()
+    expect(page.locator("#missionStrip .mission-badge")).to_have_text(re.compile(r"^9"))
+    page.locator("table.grid tbody tr").first.click()
+    amt = page.locator('#drawer [data-guide="field-金額"]')
+    before = amt.input_value()
+    amt.fill("abc")
+    amt.press("Enter")
+    tip = page.locator("#missionStrip .mission-tip")
+    expect(tip).to_contain_text("⚠")
+    expect(tip).to_contain_text("金額只能是數字，abc 存不進去，改回數字後按 Enter")
+    ui.shot("practice-15-step9-invalid")
+    amt.fill(before or "1200")
+    amt.press("Enter")
+    expect(tip).not_to_contain_text("⚠")
+
+
+def pointer_text(page):
+    return page.locator("#guidePointer").inner_text().strip()
+
+
+def _work_snapshot(page):
+    return _state(page, "({ run: state.result?.run_id ?? null, tab: state.tab, selected: state.selected, matchSearch: state.matchSearch })")
+
+
+def _prepare_own_work(ui):
+    """用範例檔當作自己的工作：執行、選一列、切到配對分頁、輸入搜尋字。"""
+    page = ui.run_sample()
+    ui.row("INV-1006").click()
+    page.click(".tab:has-text('配對')")
+    page.locator("#result input[type=search], #result .search input").first.fill("INV-1009")
+    page.wait_for_timeout(300)
+    snap = _work_snapshot(page)
+    assert snap["run"] and snap["tab"] == "match" and snap["matchSearch"] == "INV-1009" and snap["selected"], snap
+    return page, snap
+
+
+def test_reload_during_mission_resumes_and_close_restores_work(ui):
+    page, before = _prepare_own_work(ui)
+    _start_practice(page, "看這一格是怎麼來的")
+    expect(_action(page)).to_contain_text("INV1002")
+    page.reload()
+    # 重新整理後自動準備範例資料，導覽列回來，可以關閉
+    expect(page.locator("#guideBar")).to_contain_text("進階：看這一格是怎麼來的", timeout=8000)
+    expect(_action(page)).to_contain_text("INV1002")
+    assert _state(page, "state.result?.demo") is True
+    page.click('#guideBar button:has-text("關閉導覽")')
+    page.wait_for_function("(id) => state.result?.run_id === id", arg=before["run"], timeout=8000)
+    assert _work_snapshot(page) == before
+    expect(page.locator("#guideBar")).to_be_hidden()
+    assert _state(page, "sessionStorage.getItem('dp:savedWork')") is None
+    assert _prefs(page).get("activeGuide") is None
+    # 再整理一次不會又跳回練習
+    page.reload()
+    page.wait_for_selector("#recipeList .recipe-item")
+    page.wait_for_timeout(800)
+    expect(page.locator("#guideBar")).to_be_hidden()
+
+
+def test_reload_during_journey_a_resumes(ui):
+    page = ui.open()
+    page.click('[data-guide="welcome-review"]')
+    expect(page.locator("#runButton")).to_be_enabled()
+    page.click("#runButton")
+    expect(page.locator("#result table.grid")).to_be_visible()
+    expect(_action(page)).to_contain_text("Match")
+    page.reload()
+    expect(page.locator("#guideBar")).to_be_visible(timeout=8000)
+    expect(_action(page)).to_contain_text("Match")
+    assert _state(page, "state.result?.demo") is True
+
+
+def test_reload_after_mission_done_restores_work_without_guide(ui):
+    page, before = _prepare_own_work(ui)
+    _start_practice(page, "看這一格是怎麼來的")
+    expect(_action(page)).to_contain_text("INV1002")
+    ui.row("INV1002").click()
+    page.locator("#drawer .field:has([data-guide='why-金額'])").hover()
+    page.click('#drawer [data-guide="why-金額"]')
+    expect(_action(page)).to_contain_text("這一列的處理過程", timeout=5000)
+    page.click('#drawer [data-guide="row-trace"]')
+    expect(_action(page)).to_have_text("練習完成")
+    assert _state(page, "sessionStorage.getItem('dp:savedWork')")
+    page.reload()
+    # 沒有進行中的導覽、畫面也不是範例：直接還原原本的工作並清掉暫存
+    page.wait_for_function("(id) => state.result?.run_id === id", arg=before["run"], timeout=8000)
+    assert _work_snapshot(page) == before
+    assert _state(page, "state.result?.demo") in (None, False)
+    assert _state(page, "sessionStorage.getItem('dp:savedWork')") is None
+    expect(page.locator("#guideBar")).to_be_hidden()
+
+
+def test_pointer_avoids_nearby_text_on_hub_and_review_step9(ui):
+    """浮標不蓋住目標周圍的文字：練習中心卡片的「約 3 分鐘」、細節底部的「需檢查 n / n」。"""
+    from guide_checks import pointer_overlap
+    page = ui.open()
+    for width, height in ((1440, 900), (1100, 700)):
+        page.set_viewport_size({"width": width, "height": height})
+        page.click("#helpBtn")
+        page.click('#helpPopover [data-guide="help-practice"]')
+        expect(page.locator("#practiceHub")).to_be_visible()
+        page.wait_for_timeout(400)
+        assert pointer_overlap(page) is None, (width, pointer_overlap(page))
+        page.keyboard.press("Escape")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _review_to_step8(page, ui)
+    for inv, key in (("INV-1005", "match-none"), ("INV-1006", "match-none"), ("INV-1010", "match-confirm")):
+        page.locator(f'.match-card:has-text("{inv}") [data-guide="{key}"]').click()
+        page.wait_for_timeout(300)
+    expect(page.locator("#missionStrip .mission-badge")).to_have_text(re.compile(r"^9"))
+    page.wait_for_timeout(400)
+    assert pointer_overlap(page) is None, pointer_overlap(page)
+    ui.shot("practice-16-step9-pointer")

@@ -87,6 +87,30 @@ def pointer_overlap(page):
         const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
         if (at && (at === el || el.contains(at))) return `${el.tagName.toLowerCase()}:${(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 20)}`;
       }
+      // 目標鄰近（同一行、同一卡片或同一列）看得到的文字不能被浮標蓋住
+      if (target && target.isConnected) {
+        const tr = target.getBoundingClientRect();
+        const scope = target.closest('tr, li, .card, .practice-card, .help-row, .field') || target.parentElement;
+        const sr = scope ? scope.getBoundingClientRect() : null;
+        const near = (r) => (r.top < tr.bottom + 4 && r.bottom > tr.top - 4 && r.right > tr.left - 300 && r.left < tr.right + 300)
+          || (sr && r.top >= sr.top - 1 && r.bottom <= sr.bottom + 1 && r.left >= sr.left - 1 && r.right <= sr.right + 1);
+        const walker = document.createTreeWalker(root === document ? document.body : root, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          if (!n.nodeValue.trim()) continue;
+          const parent = n.parentElement;
+          if (!parent || ptr.contains(parent) || target.contains(parent)) continue;
+          if (['SCRIPT', 'STYLE', 'OPTION'].includes(parent.tagName) || parent.closest('[hidden], .guide-dock, header.bar')) continue;
+          range.selectNodeContents(n);
+          for (const r of range.getClientRects()) {
+            if (r.width < 2 || r.height < 2 || !hit(r) || !near(r)) continue;
+            const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            if (at && (at === parent || parent.contains(at) || at.contains(parent)) && at !== ptr && !ptr.contains(at)) {
+              return `文字：${n.nodeValue.trim().slice(0, 20)}`;
+            }
+          }
+        }
+      }
       return null;
     }""")
 

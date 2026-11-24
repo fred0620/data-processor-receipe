@@ -477,6 +477,7 @@ async function act(path, body) {
     return true;
   } catch (error) {
     if (path === "edit") guide()?.notify("bad-edit", { column: body?.column, value: body?.value ?? "" });
+    guide()?.schedule();
     showError(error);
     return false;
   }
@@ -1073,6 +1074,7 @@ function renderDrawer() {
     });
     input.addEventListener("change", () => {
       if (String(input.value) !== String(row.values[c.name] ?? "")) act("edit", { rid: row.rid, column: c.name, value: input.value });
+      else { guide()?.notify("good-edit"); guide()?.schedule(); }   // 改回原本的值：先前存不進去的提示不用再留著
     });
     const flagged = cellIssues(row, c.name).some((i) => i.level === "review");
     const traceKey = `${row.rid}\u0000${c.name}`;
@@ -1356,7 +1358,7 @@ function matchCard(match, row) {
   const actions = [];
   if (reviewIssue && row.status === "review") actions.push(btn({ text: "確認正確", icon: "check", variant: "primary", dataset: { guide: "match-confirm", rid: row.left }, onclick: () => act("dismiss", { keys: [reviewIssue.key], on: true }) }));
   if (reviewIssue && row.status === "confirmed") actions.push(el("button", { type: "button", class: "small ghost", text: "取消確認", onclick: () => act("dismiss", { keys: [reviewIssue.key], on: false }) }));
-  if (row.status === "manual" || row.status === "none") actions.push(el("button", { type: "button", class: "small ghost", text: "交回自動", onclick: () => decide(null) }));
+  if (row.status === "manual" || row.status === "none") actions.push(el("button", { type: "button", class: "small ghost", text: "交回自動", dataset: { guide: "match-revert", rid: row.left }, onclick: () => decide(null) }));
   actions.push(el("button", { type: "button", class: "small ghost", text: match.multi ? "加入" : row.rights.length ? "改選" : "手動指定", onclick: togglePicker }));
   if (row.status !== "none") actions.push(el("button", { type: "button", class: "small ghost", text: "沒有配對", dataset: { guide: "match-none", rid: row.left }, onclick: () => decide([]) }));
 
@@ -1618,7 +1620,7 @@ function closePeek() {
   const card = document.getElementById("peek");
   if (card) card.remove();
   peekAnchor = null;
-  guide()?.schedule();
+  if (card) guide()?.flush(); else guide()?.schedule();
 }
 
 async function peek(place, anchor, compare) {
@@ -2107,6 +2109,7 @@ async function main() {
     checkVersionMismatch(status);
     await loadRecipes();
     await loadSamples();
+    await guide()?.resumeOnLoad();
     guide()?.initWhatsNew(status);
   } catch (error) {
     toast(error.message, true);

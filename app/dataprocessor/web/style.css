@@ -517,7 +517,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
 .flow-detail summary { cursor: pointer; font-size: 12.5px; color: var(--accent-text); }
 .flow-detail .flow-children { padding-left: 14px; border-left: 1px solid var(--ink-3); }
 .explain-code { margin-top: 4px; }
-.explain-code summary { font-size: 12px; }
+.explain-code summary { font-size: 12px; width: fit-content; }
 .explain-code pre { margin: 6px 0 0; padding: 8px 10px; border-radius: var(--radius-md); background: var(--canvas); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .problems {
   margin: 0; padding: 10px 14px 10px 30px; border-radius: var(--radius-md); background: var(--danger-soft);

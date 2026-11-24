@@ -113,6 +113,8 @@ class Ui:
 @pytest.fixture()
 def ui(base_url, browser):
     context = browser.new_context(viewport={"width": 1440, "height": 900}, accept_downloads=True)
+    # headless 沒有剪貼簿權限時，「複製」會失敗而且不穩定；測試要有固定的權限
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=base_url)
     helper = Ui(context, base_url)
     yield helper
     context.close()

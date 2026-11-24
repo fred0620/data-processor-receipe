@@ -35,6 +35,7 @@
       },
       cardsSeen: [],
       practiceDone: [],
+      activeGuide: null,          // 進行中的關卡 A、mission 或 lab 的代號：重新整理後照它續玩
       tipsSeen: { jk: 0, practice: 0, hub: 0 },
       whatsnewSeen: null,
     };
@@ -262,6 +263,15 @@
 
   /* 第 8 步：現在要處理哪一張配對卡片，行動句、提醒、目標與浮標都跟著它走 */
   function matchStepInfo(ctx) {
+    const mistake = matchMistakes(ctx.state.result)[0];
+    if (mistake) {
+      return {
+        action: `${mistake.title} 處理錯了，按「交回自動」復原`,
+        tip: mistake.message,
+        target: `[data-guide="match-revert"][data-rid="${CSS.escape(mistake.row.left)}"]`,
+        pointer: "交回自動",
+      };
+    }
     const first = pendingMatches(ctx.state.result)[0];
     if (!first) return { action: "配對都處理完了", tip: "", target: null, pointer: "" };
     const { match, row, title } = first;
@@ -290,6 +300,41 @@
       target: `[data-guide="match-none"][data-rid="${left}"]`,
       pointer: "沒有配對",
     };
+  }
+
+  let matchRecovery = false;
+
+  /* 第 8 步的標準答案（範例資料，見規格附錄 A）：INV-1005、INV-1006 沒有報關單；INV-1010 對得上 AA15A0006 */
+  const MATCH_ANSWERS = [
+    { title: "INV-1005", want: "none" },
+    { title: "INV-1006", want: "none" },
+    { title: "INV-1010", want: "confirm", right: "AA15A0006" },
+  ];
+
+  /* 已經處理過、但結果和答案不一致的配對：要先「交回自動」再做對 */
+  function matchMistakes(result) {
+    const out = [];
+    for (const ans of MATCH_ANSWERS) {
+      const found = findMatchRowByTitle(result, "inv_decl", ans.title);
+      if (!found || found.row.open) continue;
+      const { match, row } = found;
+      const rightRid = ans.right ? findRightRidByTitle(match, ans.right) : null;
+      const ok = ans.want === "none"
+        ? row.status === "none"
+        : row.status === "confirmed" && Boolean(rightRid) && (row.rights || []).includes(rightRid);
+      if (ok) continue;
+      const picked = (row.rights || []).map((rid) => (match.right_title || []).map((k) => match.right_rows?.[rid]?.values?.[k]).filter(Boolean).join("・")).filter(Boolean).join("、");
+      let message;
+      if (ans.want === "none") {
+        message = `${ans.title} 被指定配對到 ${picked || "一筆報關單"} 了，它其實沒有對應的報關單。按「交回自動」復原，再按「沒有配對」`;
+      } else if (row.status === "none") {
+        message = `${ans.title} 標成沒有配對了，它其實對得上 ${ans.right}。按「交回自動」復原，再按「確認正確」`;
+      } else {
+        message = `${ans.title} 配到${picked ? ` ${picked}` : "別筆"}了，它其實對得上 ${ans.right}。按「交回自動」復原，再按「確認正確」`;
+      }
+      out.push({ match, row, title: ans.title, message });
+    }
+    return out;
   }
 
   /* 第 9 步：選到的列有一定要處理的警示時，浮標改指那個警示的動作 */
@@ -618,8 +663,24 @@
         tip: (ctx) => matchStepInfo(ctx).tip,
         target: (ctx) => matchStepInfo(ctx).target,
         pointer: (ctx) => matchStepInfo(ctx).pointer,
-        wrong: (ctx) => (ctx.flags.exportedEarly ? unfinishedRowsWarning(ctx) : null),
-        done: (ctx) => Boolean(ctx.state.result?.demo) && pendingMatches(ctx.state.result).length === 0,
+        // 處理錯的卡片會離開「需處理」清單：有錯時切到「全部」並只留那一張，浮標才指得到「交回自動」
+        keepVisible: (ctx) => {
+          const mistake = matchMistakes(ctx.state.result)[0];
+          const st = ctx.state;
+          if (mistake) {
+            matchRecovery = true;
+            if (st.tab !== "match" || st.matchName !== mistake.match.name || st.matchFilter !== "all" || st.matchFocus !== mistake.row.left) {
+              ctx.bridge.goTo({ tab: "match", matchName: mistake.match.name, matchFilter: "all", matchFocus: mistake.row.left, matchSearch: "" });
+            }
+          } else if (matchRecovery) {
+            matchRecovery = false;
+            if (st.tab === "match" && st.matchFilter === "all") {
+              ctx.bridge.goTo({ tab: "match", matchName: st.matchName, matchFilter: "todo", matchFocus: null, matchSearch: "" });
+            }
+          }
+        },
+        wrong: (ctx) => matchMistakes(ctx.state.result)[0]?.message || (ctx.flags.exportedEarly ? unfinishedRowsWarning(ctx) : null),
+        done: (ctx) => Boolean(ctx.state.result?.demo) && pendingMatches(ctx.state.result).length === 0 && matchMistakes(ctx.state.result).length === 0,
       },
       {
         id: "review-9",
@@ -654,7 +715,16 @@
           if (blocker) return blocker.pointer;
           return document.querySelector('#drawer [data-guide="confirm-next"]') ? "確認無誤，下一筆" : "點這一列";
         },
-        wrong: (ctx) => (ctx.flags.exportedEarly ? unfinishedRowsWarning(ctx) : null),
+        wrong: (ctx) => {
+          const bad = ctx.flags.badEdit;
+          if (bad && bad.column) {
+            const type = ctx.state.result?.output?.columns?.find((c) => c.name === bad.column)?.type;
+            const want = type === "number" ? "數字" : type === "integer" ? "整數" : type === "date" ? "日期" : "合法的值";
+            const shown = bad.value === "" ? "空白" : bad.value;
+            return `${bad.column}只能是${want}，${shown} 存不進去，改回${want}後按 Enter`;
+          }
+          return ctx.flags.exportedEarly ? unfinishedRowsWarning(ctx) : null;
+        },
         done: (ctx) => Boolean(ctx.state.result?.demo) && reviewRowsLeft(ctx.state.result) === 0,
       },
       {
@@ -1310,6 +1380,31 @@
         this.prefs.practiceDone.push(id);
         this.savePrefs();
       }
+      this.setActiveGuide(null);
+    },
+
+    /* 記著「正在做哪一關」，重新整理後才知道要不要續玩；做完或離開就清掉 */
+    setActiveGuide(id) {
+      if ((this.prefs.activeGuide || null) === id) return;
+      this.prefs.activeGuide = id;
+      this.savePrefs();
+    },
+
+    /* 頁面載入時：有進行中的關卡就自動準備範例資料並顯示導覽列；
+       沒有導覽、畫面也不是範例，但 sessionStorage 還留著使用者的工作，就直接還原 */
+    async resumeOnLoad() {
+      if (this.bridge?.isPopout) return;
+      const id = this.prefs.activeGuide;
+      if (id === "review" && !this.prefs.journeys.review?.done) {
+        await this.startJourney("review");
+        return;
+      }
+      if (id && id !== "review" && PRACTICE.some((p) => p.id === id)) {
+        await this.startPractice(id);
+        return;
+      }
+      if (id) this.setActiveGuide(null);
+      if (this.savedWork && !this.isShowingDemo()) await this.restoreWork();
     },
 
     practiceCount() {
@@ -1649,6 +1744,7 @@
       if (id === "review") {
         this.captureWork();
         this.activeJourney = id;
+        this.setActiveGuide("review");
         const targetStepId = resuming ? jp.step : def.steps[0].id;
         const targetStep = def.steps.find((s) => s.id === targetStepId) || def.steps[0];
 
@@ -1760,6 +1856,7 @@
       if (MISSIONS[this.activeJourney]) this.releasePopouts();
       this.missionState = null;
       this.activeJourney = null;
+      this.setActiveGuide(null);
       this.stepId = null;
       this.subId = null;
       this.lastStepId = null;
@@ -1827,6 +1924,12 @@
       });
     },
 
+    /* 立刻重畫（不等下一個影格）：原始資料小卡這類「關掉後目標才露出來」的情況，強調要同時出現 */
+    flush() {
+      if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
+      this.evaluateAndRender();
+    },
+
     evaluateAndRender() {
       const def = this.currentJourneyDef();
       if (!def) {
@@ -1839,6 +1942,7 @@
 
       if (!alreadyDone) {
         const cur = this.currentStep();
+        if (cur?.keepVisible) { try { cur.keepVisible(ctx); } catch (_e) { /* 略過 */ } }
         const curDone = cur ? Boolean(cur.done(ctx)) : false;
         const sameStep = this.lastStepId === cur?.id;
         // 只有「停在未完成的步驟，且它剛轉為完成」時自動推進到第一個未完成的步驟
@@ -1863,6 +1967,7 @@
               jp.done = true;
               jp.step = null;
               this.savePrefs();
+              this.setActiveGuide(null);
             }
           }
         } else {
@@ -2300,6 +2405,9 @@
         return;
       }
 
+      // 目前這個浮標會擋住 elementFromPoint：量障礙物的時候先藏起來（visibility 不改版面）
+      const prevVisibility = ptr.style.visibility;
+      ptr.style.visibility = "hidden";
       const obstacles = inDialog ? [] : [
         document.querySelector("header.bar"),
         dock,
@@ -2326,6 +2434,35 @@
         if (at && (at === c || c.contains(at))) obstacles.push(sr);
       }
 
+      // 目標周圍看得到的文字（同一行、同一卡片或同一列）也不能蓋住，例如「沒用到」旁儲存格的報單號碼
+      {
+        const scope = el.closest("tr, li, .practice-card, .help-row, .field, .card") || el.parentElement;
+        const sr = scope ? scope.getBoundingClientRect() : null;
+        const inScope = (r) => Boolean(sr) && r.top >= sr.top - 1 && r.bottom <= sr.bottom + 1 && r.left >= sr.left - 1 && r.right <= sr.right + 1;
+        const nearBand = (r) => r.top < rect.bottom + 4 && r.bottom > rect.top - 4 && r.right > rect.left - 300 && r.left < rect.right + 300;
+        const walker = document.createTreeWalker(root === document ? document.body : root, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        const dockNode = document.querySelector(".guide-dock");
+        let visited = 0;
+        for (let n = walker.nextNode(); n && visited < 4000; n = walker.nextNode()) {
+          visited += 1;
+          if (!n.nodeValue.trim()) continue;
+          const parent = n.parentElement;
+          if (!parent || el.contains(parent) || ptr.contains(parent) || (dockNode && dockNode.contains(parent))) continue;
+          if (["SCRIPT", "STYLE", "OPTION", "TEXTAREA"].includes(parent.tagName) || parent.closest("[hidden]")) continue;
+          range.selectNodeContents(n);
+          for (const tr of range.getClientRects()) {
+            if (tr.width < 2 || tr.height < 2) continue;
+            if (!nearBand(tr) && !inScope(tr)) continue;
+            if (tr.bottom < 0 || tr.top > vh) continue;
+            const at = document.elementFromPoint(Math.min(Math.max(tr.left + tr.width / 2, 0), vw - 1), Math.min(Math.max(tr.top + tr.height / 2, 0), vh - 1));
+            if (at && (at === parent || parent.contains(at) || at.contains(parent)) && !ptr.contains(at)) obstacles.push(tr);
+          }
+        }
+      }
+
+      ptr.style.visibility = prevVisibility;
+
       const gap = 10;
       const barRect = actionBar ? actionBar.getBoundingClientRect() : rect;
       const candidates = [
@@ -2336,6 +2473,17 @@
         { side: "bottom", left: rect.left + (rect.width - pw) / 2, top: barRect.bottom + gap },
         { side: "top", left: rect.left + (rect.width - pw) / 2, top: barRect.top - ph - gap },
         { side: "left", left: barRect.left - pw - gap, top: rect.top + (rect.height - ph) / 2 },
+        { side: "right", left: rect.right + gap, top: rect.bottom + gap },
+        { side: "left", left: rect.left - pw - gap, top: rect.bottom + gap },
+        { side: "right", left: rect.right + gap, top: rect.top - ph - gap },
+        { side: "left", left: rect.left - pw - gap, top: rect.top - ph - gap },
+        { side: "right", left: barRect.right + gap, top: rect.top + (rect.height - ph) / 2 },
+        // 目標在視窗邊緣、左右都擠滿時，改貼在目標上方或下方，靠左或靠右對齊
+        { side: "top", left: rect.right - pw, top: rect.top - ph - gap },
+        { side: "top", left: rect.left, top: rect.top - ph - gap },
+        { side: "bottom", left: rect.right - pw, top: rect.bottom + gap },
+        { side: "bottom", left: rect.left, top: rect.bottom + gap },
+        { side: "top", left: rect.left + (rect.width - pw) / 2, top: rect.top - ph * 2 - gap * 2 },
       ];
 
       const clamp = (c) => ({
@@ -2705,6 +2853,7 @@
 
       this.missionState = { done: false };
       this.activeJourney = id;
+      this.setActiveGuide(id);
       this.stepId = def.steps[0].id;
       this.subId = null;
       this.lastStepId = null;
@@ -2837,6 +2986,7 @@
         };
         this.labJourney = buildLabJourney(card, this.labState);
         this.activeJourney = labId;
+        this.setActiveGuide(labId);
         this.stepId = this.labJourney.steps[0].id;
         this.lastStepId = null;
         this.lastStepDone = false;
@@ -3194,6 +3344,7 @@
           this.labState.sawProblem = true;
         }
       } else if (event === "row-select") {
+        this.flags.badEdit = null;
         if (this.labState && this.labState.card.step1Row) {
           const row = findRowByTitle(this.bridge.state.result, this.labState.card.step1Row);
           if (row && payload.rid === row.rid) this.labState.sawProblem = true;
