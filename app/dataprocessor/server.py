@@ -180,9 +180,25 @@ def _is_returning() -> bool:
         return True
     if paths.RECIPES.is_dir():
         for path in paths.RECIPES.glob("*.yaml"):
-            if path.stem not in ("invoice-declaration", "practice-invoice"):
+            if not _is_builtin_recipe(path):
                 return True
     return False
+
+
+def _recipe_text(path: Path) -> str:
+    return path.read_bytes().decode("utf-8-sig", errors="replace").replace("\r\n", "\n").strip()
+
+
+def _is_builtin_recipe(path: Path) -> bool:
+    """名稱和內容都和內建的一樣才算內建（第一次啟動複製的範例、關卡 B 存的練習）；改過或同名不同內容算使用者的。"""
+    builtin = {
+        "invoice-declaration": paths.EXAMPLES / "workspace" / "recipes" / "invoice-declaration.yaml",
+        "practice-invoice": paths.DEMO / "recipe-fixed.yaml",
+    }.get(path.stem)
+    try:
+        return builtin is not None and _recipe_text(path) == _recipe_text(builtin)
+    except OSError:
+        return False
 
 
 @app.get("/api/status")

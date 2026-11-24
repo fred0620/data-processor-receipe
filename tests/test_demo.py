@@ -128,3 +128,20 @@ def test_status_returning_flag(client):
     # reviews 有內容算 returning
     (server.paths.REVIEWS / "r.json").write_text("{}", encoding="utf-8")
     assert client.get("/api/status", headers=LOCAL).json["returning"] is True
+
+
+def test_returning_when_own_recipe_reuses_builtin_name(client):
+    """自己的 recipe 剛好也叫 invoice-declaration 或 practice-invoice，內容不同就算 returning。"""
+    text = (EXAMPLES / "recipes" / "invoice-declaration.yaml").read_text(encoding="utf-8")
+    own = server.paths.RECIPES / "invoice-declaration.yaml"
+    own.write_text(text.replace("name:", "name: 我自己的", 1), encoding="utf-8")
+    assert client.get("/api/status", headers=LOCAL).json["returning"] is True
+    own.unlink()
+
+    # 關卡 B 存下的練習 recipe（內容和修正版相同，換行是 CRLF 也一樣）不算
+    fixed = (DEMO / "recipe-fixed.yaml").read_text(encoding="utf-8")
+    practice = server.paths.RECIPES / "practice-invoice.yaml"
+    practice.write_bytes(fixed.replace("\n", "\r\n").encode("utf-8"))
+    assert client.get("/api/status", headers=LOCAL).json["returning"] is False
+    practice.write_text(fixed + "\n# 我改過\n", encoding="utf-8")
+    assert client.get("/api/status", headers=LOCAL).json["returning"] is True
