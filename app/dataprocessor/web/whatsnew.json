@@ -1,6 +1,18 @@
 {
   "versions": [
     {
+      "version": "0.2.1",
+      "date": "2026-11-24",
+      "items": [
+        {
+          "id": "0.2.1-practice",
+          "title": "進階功能練習中心",
+          "body": "說明選單的「練習中心」，11 項進階功能一項項練。",
+          "spotlight": "practice-center"
+        }
+      ]
+    },
+    {
       "version": "0.2.0",
       "date": "2026-11-24",
       "items": [

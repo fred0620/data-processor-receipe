@@ -43,7 +43,7 @@ def test_lab_match_full_flow_pointer_clear_and_work_restore(ui):
     expect(page.locator("#helpPopover")).to_be_visible()
     page.click('#helpPopover button:has-text("號碼寫法不同也配得到")')
     expect(page.locator("#helpCard")).to_be_visible()
-    page.click('#helpCard button:has-text("實地練習")')
+    page.click('#helpCard button:has-text("開始練習")')
     expect(page.locator('[data-guide="lab-editor"]')).to_be_visible()
 
     # 練習 recipe 不出現在左欄清單
@@ -101,7 +101,7 @@ def test_all_other_labs_pass_in_ui(ui):
         expect(page.locator("#helpPopover")).to_be_visible()
         page.click(f'#helpPopover button:has-text("{lab["title"]}")')
         expect(page.locator("#helpCard")).to_be_visible()
-        page.click('#helpCard button:has-text("實地練習")')
+        page.click('#helpCard button:has-text("開始練習")')
         expect(page.locator('[data-guide="lab-editor"]')).to_be_visible()
 
         editor = page.locator('[data-guide="lab-editor"]')

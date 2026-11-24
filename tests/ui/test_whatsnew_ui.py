@@ -16,7 +16,7 @@ def test_whatsnew_triggers_and_clears(ui):
       localStorage.setItem('dp:onboarding.v1', JSON.stringify({
         dismissed: false,
         journeys: { review: { step: null, done: false, skipped: [] }, recipe: { step: null, done: false, skipped: [] } },
-        cardsSeen: [], labsDone: [], tipsSeen: { jk: 0 },
+        cardsSeen: [], practiceDone: [], tipsSeen: { jk: 0 },
         whatsnewSeen: '0.1.0'
       }));
     }""")

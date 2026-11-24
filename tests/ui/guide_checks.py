@@ -43,3 +43,61 @@ def assert_pointer_text_and_direction(page):
     }[d]
     assert ok, f"三角形朝{d}，但浮標不在目標的相反側：{rep}"
     return rep
+
+
+def emphasis_counts(page):
+    """可見的浮標、虛線框、外框各有幾個（同一時間最多一種）。"""
+    return page.evaluate("""() => {
+      const vis = (el) => {
+        if (!el || el.hidden) return false;
+        const cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      return { pointer: vis(document.getElementById('guidePointer')) ? 1 : 0,
+               outline: vis(document.querySelector('.guide-outline')) ? 1 : 0,
+               frame: [...document.querySelectorAll('.guide-target')].filter(vis).length > 0 ? 1 : 0 };
+    }""")
+
+
+def pointer_overlap(page):
+    """浮標可見時，回傳它蓋到的東西（頂列、指令條，或目標以外看得到的可點元素）；沒有就回傳 None。"""
+    return page.evaluate("""() => {
+      const ptr = document.getElementById('guidePointer');
+      if (!ptr || ptr.hidden) return null;
+      const pr = ptr.getBoundingClientRect();
+      if (!pr.width || !pr.height) return null;
+      const hit = (r) => Math.min(pr.right, r.right) - Math.max(pr.left, r.left) > 1
+        && Math.min(pr.bottom, r.bottom) - Math.max(pr.top, r.top) > 1;
+      const dialog = ptr.closest('dialog');
+      if (!dialog) {
+        for (const [name, node] of [['header.bar', document.querySelector('header.bar')], ['.guide-dock', document.querySelector('.guide-dock')]]) {
+          if (node && !node.hidden && node.getClientRects().length && hit(node.getBoundingClientRect())) return name;
+        }
+      }
+      const target = window.Spotlights?.engine?.lastTargetEl;
+      const root = dialog || document;
+      for (const el of root.querySelectorAll('button, a[href], input, select, textarea, summary, [role=switch]')) {
+        if (el === ptr || !el.getClientRects().length) continue;
+        if (target && (el === target || el.contains(target) || target.contains(el))) continue;
+        if (getComputedStyle(el).opacity === '0') continue;
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height || !hit(r)) continue;
+        const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (at && (at === el || el.contains(at))) return `${el.tagName.toLowerCase()}:${(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 20)}`;
+      }
+      return null;
+    }""")
+
+
+def assert_step_guidance(page):
+    """關卡每一步與子步驟的共用檢查：行動句不為空、恰好一種可見的強調、浮標不寫箭頭、不蓋到別的可點元素。"""
+    action = page.locator("#missionStrip .mission-action").inner_text().strip()
+    assert action, "行動句不可為空"
+    counts = emphasis_counts(page)
+    assert sum(counts.values()) == 1, f"這一步（{action}）要剛好一種可見的強調：{counts}"
+    covered = pointer_overlap(page)
+    assert covered is None, f"這一步（{action}）的浮標蓋到 {covered}"
+    assert_pointer_text_and_direction(page)
+    return action

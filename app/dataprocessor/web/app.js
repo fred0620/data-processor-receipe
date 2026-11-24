@@ -33,7 +33,7 @@ function toast(message, bad = false, action = null) {
   const node = $("toast");
   node.replaceChildren(el("span", { text: message }));
   if (action) {
-    node.append(el("button", { type: "button", class: "small ghost toast-action", text: action.text,
+    node.append(el("button", { type: "button", class: "small ghost toast-action", text: action.text, dataset: { guide: "toast-action" },
       onclick: () => { node.hidden = true; action.run(); } }));
   }
   node.classList.toggle("bad", bad);
@@ -56,13 +56,16 @@ function resetButton(result) {
       button.classList.add("confirming");
       button.replaceChildren(icon("reset"), el("span", { text: `清掉 ${result.decisions} 項人工決定？再按一次` }));
       resetButton.timer = setTimeout(() => resetButton(state.result), 4000);
+      guide()?.notify("reset-armed");
       return;
     }
-    if (await act("reset")) {
-      toast("已清掉人工決定，可以從頭檢查。補上的對照表沒有清除。", false,
-        { text: "復原", run: async () => { if (await act("restore")) toast("已復原重設前的檢查"); } });
-    }
+    if (await act("reset")) offerRestore("已清掉人工決定，可以從頭檢查。補上的對照表沒有清除。");
   };
+}
+
+/* 清掉之後的提示，旁邊有「復原」；導覽的練習也會在提示消失後再叫出來 */
+function offerRestore(message = "已清掉人工決定，可以從頭檢查。補上的對照表沒有清除。") {
+  toast(message, false, { text: "復原", run: async () => { if (await act("restore")) toast("已復原重設前的檢查"); } });
 }
 
 class ApiError extends Error {
@@ -274,10 +277,17 @@ const guide = () => window.Spotlights?.engine || null;
 
 function renderRecipes() {
   const list = $("recipeList");
+  const demoId = state.recipeId && state.recipeId.startsWith("demo:") && !state.recipes.some((r) => r.id === state.recipeId) ? state.recipeId : null;
+  const demoItem = demoId ? el("div", {},
+    el("button", { type: "button", class: "recipe-item active" },
+      el("div", { class: "name" }, state.demoRecipe?.name || "範例 recipe", el("span", { class: "demo-tag", text: "範例" }))),
+    el("div", { class: "recipe-tools" },
+      el("button", { type: "button", class: "link", text: "查看", dataset: { guide: "recipe-view" },
+        onclick: () => viewRecipe({ id: demoId, name: state.demoRecipe?.name || "範例 recipe" }) }))) : null;
   if (!state.recipes.length) {
-    list.replaceChildren(el("p", { class: "muted", text: "還沒有 recipe，按「新增」放一份進來。" }));
+    list.replaceChildren(...(demoItem ? [demoItem] : []), el("p", { class: "muted", text: "還沒有 recipe，按「新增」放一份進來。" }));
   } else {
-    list.replaceChildren(...state.recipes.map((r) => el("div", {},
+    list.replaceChildren(...(demoItem ? [demoItem] : []), ...state.recipes.map((r) => el("div", {},
       el("button", {
         type: "button", class: `recipe-item${r.id === state.recipeId ? " active" : ""}`,
         onclick: () => { state.recipeId = r.id; renderRecipes(); },
@@ -286,7 +296,7 @@ function renderRecipes() {
       r.description ? el("div", { class: "desc", text: r.description }) : null,
       r.problems.length ? el("div", { class: "bad", text: `有 ${r.problems.length} 個問題，無法使用` }) : null),
       r.id === state.recipeId ? el("div", { class: "recipe-tools" },
-        el("button", { type: "button", class: "link", text: "查看", onclick: () => viewRecipe(r) }),
+        el("button", { type: "button", class: "link", text: "查看", dataset: { guide: "recipe-view" }, onclick: () => viewRecipe(r) }),
         r.problems.length ? el("button", { type: "button", class: "link", text: "問題清單", onclick: () => showProblems(`${r.name} 的問題`, r.problems) }) : null,
         el("button", { type: "button", class: "link danger", text: "刪除", onclick: () => deleteRecipe(r) })) : null)));
   }
@@ -296,7 +306,7 @@ function renderRecipes() {
 /* recipe 的邏輯說明：由程式依 recipe 產生，和實際執行的邏輯一致。
    以一列資料為主角，依序寫出會經過的判斷；其他資料表的讀法放在後面。 */
 function explainNode(node, index = null) {
-  const code = node.code ? el("details", { class: "explain-code" }, el("summary", { text: "SQL 原文" }), el("pre", { text: node.code })) : null;
+  const code = node.code ? el("details", { class: "explain-code", ontoggle: () => guide()?.schedule() }, el("summary", { text: "SQL 原文" }), el("pre", { text: node.code })) : null;
   const children = node.children.length ? el("ul", { class: "flow-children" }, node.children.map((child) => explainNode(child))) : null;
   if (node.kind === "detail") {
     return el("li", { class: "flow-detail" }, el("details", {}, el("summary", { text: node.text }), children));
@@ -332,6 +342,7 @@ async function viewRecipe(recipe) {
       btn({ text: "修改", icon: "edit", variant: "default", size: "normal", onclick: () => editRecipe(data.text) }),
       el("button", { type: "button", class: "primary", text: "關閉", onclick: closeDialog }),
     ]);
+    guide()?.notify("recipe-view");
   } catch (error) { showError(error); }
 }
 
@@ -453,6 +464,7 @@ async function runNow() {
     const isDemo = Boolean((state.recipeId && (state.recipeId.startsWith("demo:") || state.recipeId.startsWith("practice:"))) || state.workbook?.demo);
     if (!isDemo) guide()?.clearSavedWork();
     setResult(await post("/api/runs", { recipe: state.recipeId, workbook: state.workbook.id }), true);
+    guide()?.afterRun(state.result);
   } catch (error) { showError(error, "無法執行"); }
 }
 
@@ -500,7 +512,7 @@ function popOut() {
   const known = popped.get(tab);
   if (known && known.win && !known.win.closed) { known.win.focus(); return; }
   handoff = { key: tab, changes: viewState() };
-  if (!openWindow(tab, { tab })) { toast("瀏覽器擋下了新視窗，請允許這個網站開啟彈出式視窗後再試一次", true); return; }
+  if (!openWindow(tab, { tab })) { toast("瀏覽器擋下了新視窗，請允許這個網站開啟彈出式視窗後再試一次", true); guide()?.notify("popout-blocked"); return; }
   const rest = tabList().find(([id]) => !popped.has(id));   // 主視窗換到還在這裡的分頁
   if (rest) { state.tab = rest[0]; state.issueFocus = null; }
   renderTabs();
@@ -550,6 +562,15 @@ channel?.addEventListener("message", ({ data }) => {
     const same = state.result && state.result.run_id === data.result.run_id;
     if (same) setResult(data.result, false, true);
     else if (isPopout) setResult(data.result, true, true);   // 主視窗換了新的處理，pop out 視窗跟著換
+    return;
+  }
+  if (data.type === "select") {
+    /* pop out 視窗選了一列：主視窗同步選到同一列（打字時先不動） */
+    if (!isPopout && state.result && data.run_id === state.result.run_id && !isTyping()) {
+      state.selected = data.rid;
+      renderTabs();
+      guide()?.notify("popout-select", { rid: data.rid });
+    }
     return;
   }
   if (data.type === "show") {
@@ -725,8 +746,9 @@ function stageLinks(stage) {
   const go = (changes) => () => goTo({ issueFocus: null, ...changes });
   const issuesOf = (test) => activeIssues().filter(test);
   const items = [];
-  const link = (text, extra, onclick) => el("li", {}, text, extra ? el("span", { class: "muted", text: extra }) : null,
-    onclick ? el("button", { type: "button", class: "link", style: "margin-left:10px", text: "查看", onclick }) : null);
+  const link = (text, extra, onclick, code = null) => el("li", {}, text, extra ? el("span", { class: "muted", text: extra }) : null,
+    onclick ? el("button", { type: "button", class: "link", style: "margin-left:10px", text: "查看", onclick,
+      dataset: { guide: "stage-link", stage: stage.id, ...(code ? { code } : {}) } }) : null);
   if (stage.id === "load") {
     const notes = issuesOf((i) => i.stage === "load");
     if (notes.length) items.push(link(`讀取時的提醒 ${notes.length} 則`, null, go({ tab: "issues", issueFilter: "all", issueFocus: { stage: "load", label: "讀取時的提醒" } })));
@@ -745,7 +767,7 @@ function stageLinks(stage) {
   } else if (stage.id === "validate") {
     for (const check of stage.checks || []) {
       items.push(link(`${check.message}：${check.rows} 列`, check.done ? `（已處理 ${check.done}）` : null,
-        check.rows ? go({ tab: "issues", issueFilter: "all", issueFocus: { code: check.code, label: check.message } }) : null));
+        check.rows ? go({ tab: "issues", issueFilter: "all", issueFocus: { code: check.code, label: check.message } }) : null, check.code));
     }
   } else if (stage.id === "mapping") {
     const pending = r.unmapped.filter((u) => u.missing === "ask").length;
@@ -887,8 +909,9 @@ function visibleRows(r = state.result) {
 }
 
 /* 開關（Stageshow 的 Toggle）：設定是開或關，用開關比按鈕清楚 */
-function toggle(text, on, onChange, title = null) {
+function toggle(text, on, onChange, title = null, guideTag = null) {
   return el("button", { type: "button", role: "switch", "aria-checked": String(Boolean(on)), class: "switch", title,
+    dataset: guideTag ? { guide: guideTag } : undefined,
     onclick: () => onChange(!on) }, el("span", { class: "switch-track" }), el("span", { text }));
 }
 
@@ -907,7 +930,7 @@ function renderRows(keepMenu = false) {
     el("tbody", {}, rows.slice(0, 2000).map((row) => el("tr", {
       class: state.selected === row.rid ? "selected" : null,
       dataset: { rid: row.rid },
-      onclick: () => { state.selected = row.rid; renderTabs(); guide()?.notify("row-select", { rid: row.rid }); },
+      onclick: () => { state.selected = row.rid; broadcastSelect(row.rid); renderTabs(); guide()?.notify("row-select", { rid: row.rid }); },
     },
     el("td", { class: "status-col" }, el("span", { class: `dot ${row.status}` })),
     el("td", { class: "rowno", text: row.row ?? "", title: row.sheet ? `${row.sheet}・第 ${row.row} 列` : null }),
@@ -1058,6 +1081,7 @@ function renderDrawer() {
       el("button", { type: "button", class: "link", text: "還原", onclick: () => act("edit", { rid: row.rid, column: c.name, revert: true }) })) : null;
       const why = el("button", {
         type: "button", class: `link why${open ? " open" : ""}`, text: open ? "收起" : "怎麼來的",
+        dataset: { guide: `why-${c.name}`, rid: row.rid },
         onclick: () => { open ? state.openTrace.delete(traceKey) : state.openTrace.add(traceKey); renderDrawer(); },
       });
       /* 原始儲存格：點了在旁邊跳出小卡對照，不離開這一列 */
@@ -1072,7 +1096,7 @@ function renderDrawer() {
   });
   const rowKey = `${row.rid}\u0000*`;
   const rowStory = el("details", { class: "row-trace", open: state.openTrace.has(rowKey) },
-    el("summary", { text: "這一列的處理過程" }), state.openTrace.has(rowKey) ? traceList(row, (t) => t.steps) : null);
+    el("summary", { text: "這一列的處理過程", dataset: { guide: "row-trace" } }), state.openTrace.has(rowKey) ? traceList(row, (t) => t.steps) : null);
   rowStory.addEventListener("toggle", () => {
     if (rowStory.open === state.openTrace.has(rowKey)) return;
     rowStory.open ? state.openTrace.add(rowKey) : state.openTrace.delete(rowKey);
@@ -1094,9 +1118,14 @@ function neighbors(rid) {
   return { list, index, prev: index > 0 ? list[index - 1] : null, next: index >= 0 ? list[index + 1] || null : list[0] || null };
 }
 
+function broadcastSelect(rid) {
+  if (isPopout && state.result) channel?.postMessage({ type: "select", rid, run_id: state.result.run_id });
+}
+
 function selectRow(rid) {
   closePeek();
   state.selected = rid;
+  broadcastSelect(rid);
   renderTabs();
   requestAnimationFrame(() => document.querySelector("table.grid tr.selected")?.scrollIntoView({ block: "nearest" }));
 }
@@ -1185,6 +1214,8 @@ function traceList(row, pick) {
       else items.push([line.trim()]);
     }
     put(box, items.map(([head, ...rest]) => el("li", {}, head, rest.map((more) => el("div", { class: "sub", text: more })))));
+    box.dataset.loaded = "1";
+    guide()?.schedule();
     const focus = traceFocus && [...box.children].find((li) => li.textContent.includes(`「${traceFocus}」`));
     if (focus) {
       traceFocus = null;
@@ -1625,7 +1656,7 @@ async function peek(place, anchor, compare) {
     el("div", { class: "peek-head" },
       el("div", { class: "peek-title" }, el("strong", { text: place.label }),
         el("span", { class: "muted", text: `${place.sheet}・第 ${place.row} 列${place.cell ? `・${place.cell}` : ""}` })),
-      btn({ text: "完整工作表", icon: "sheet", onclick: () => showSheet(place) }),
+      btn({ text: "完整工作表", icon: "sheet", dataset: { guide: "peek-full" }, onclick: () => showSheet(place) }),
       btn({ icon: "x", label: "關閉", onclick: closePeek })),
     compare && place.cell ? el("div", { class: "peek-compare" },
       el("span", { class: "muted", text: "原始" }), el("span", { class: "peek-raw", text: original === null || original === undefined || original === "" ? "（空白）" : original }),
@@ -1637,6 +1668,7 @@ async function peek(place, anchor, compare) {
   placePeek(card, anchor);
   const focus = card.querySelector(".src-cell") || card.querySelector(".src-target td");
   if (focus) scrollToCell(focus, false);
+  guide()?.schedule();   // 小卡的內容讀好了：導覽可以指向小卡裡的按鈕
 }
 
 /* 小卡放在按鈕旁邊：下方放得下就放下方，否則放上方；左右不超出視窗 */
@@ -1689,7 +1721,7 @@ async function renderSource() {
   const setSplit = (on) => { state.source2 = on ? defaultRight(state.source) : null; renderSource(); };
   put(body,
     el("div", { class: "toolbar source-top" },
-      toggle("左右並排", split, setSplit, "把兩張工作表放在左右兩邊比對，例如發票明細和報關單"),
+      toggle("左右並排", split, setSplit, "把兩張工作表放在左右兩邊比對，例如發票明細和報關單", "source-split"),
       split ? btn({ text: "左右交換", icon: "swap", onclick: () => { [state.source, state.source2] = [state.source2, state.source]; renderSource(); } }) : null),
     el("div", { class: `source-split${split ? " two" : ""}` },
       panes.map((src, i) => sourcePane(r, src, pages[i], split ? (i ? "右" : "左") : null, split ? panes[1 - i].sheet : null,
@@ -1700,6 +1732,7 @@ async function renderSource() {
     requestAnimationFrame(() => scrollToCell(focus, i === 0));
     keepAligned(pane.querySelector(".source-wrap"), focus);
   });
+  guide()?.schedule();   // 工作表讀好、畫好了：導覽才找得到裡面的列
 }
 
 /* 按配對欄的連結：另一邊打開配到的列，自己這一列也標出來，兩邊成對。
@@ -1837,8 +1870,10 @@ function sourcePane(r, src, page, side, otherSheet = null, onPartner = () => {})
       const skip = marked?.skipped.get(number);
       const marks = columns.map((col) => col.marks.get(number));
       const kind = skip ? "skip" : marks.some((x) => x?.kind === "open") ? "open" : marks.some((x) => x) ? "done" : "";
+      const unused = !skip && marks.some((x) => x?.text === "沒用到");
       return el("tr", { class: [header ? "src-header" : "", target ? "src-target" : "", !target && related.has(number) ? "src-related" : "",
-        kind ? `m-${kind}` : ""].filter(Boolean).join(" ") || null, dataset: { row: number } },
+        kind ? `m-${kind}` : ""].filter(Boolean).join(" ") || null, dataset: unused ? { row: number, unused: "1" } : { row: number },
+        onclick: unused ? () => guide()?.notify("unused-click", { row: number, sheet: page.name }) : undefined },
         el("th", { class: "rowno", title: header ? `${header.label}的表頭` : null, text: number }),
         columns.map((col, k) => {
           const mark = marks[k];
@@ -1952,9 +1987,10 @@ function renderIssues() {
       focus ? el("span", { class: "badge manual" }, `只看：${focus.label}`,
         btn({ icon: "x", variant: "quiet", label: "顯示全部", extra: "chip-close", onclick: () => { state.issueFocus = null; renderTabs(); } })) : null,
       el("span", { class: "spacer" }),
-      selectable.length ? btn({ text: "全選", onclick: () => { selectable.forEach((i) => state.checked.add(i.key)); renderTabs(); } }) : null,
+      selectable.length ? btn({ text: "全選", dataset: { guide: "issues-all" }, onclick: () => { selectable.forEach((i) => state.checked.add(i.key)); renderTabs(); } }) : null,
       state.checked.size ? el("button", {
         type: "button", class: "small primary", text: `${state.issueFilter === "dismissed" ? "取消確認" : "確認無誤"}（${state.checked.size}）`,
+        dataset: { guide: "issues-confirm" },
         onclick: async () => { const keys = [...state.checked]; state.checked.clear(); await act("dismiss", { keys, on: state.issueFilter !== "dismissed" }); },
       }) : null),
     issues.length ? el("div", { class: "issue-list" }, issues.map((issue) => {
@@ -2057,7 +2093,7 @@ async function main() {
     state, prefs, isPopout, popped,
     api, post, toast, copyText,
     renderTabs, renderRows, renderDrawer, renderRecipes,
-    selectRow, goTo, setResult, setWorkbook, loadRecipes, editRecipe, popInAll, openIssues, mustHandle,
+    selectRow, goTo, setResult, setWorkbook, loadRecipes, editRecipe, popInAll, openIssues, mustHandle, offerRestore,
   });
   if (isPopout) {
     const status = await api("/api/status").catch(() => ({}));

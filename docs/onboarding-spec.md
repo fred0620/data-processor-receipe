@@ -138,7 +138,7 @@
 
 本專案的人工決定本來就自動保存，所以不提供「在目前資料上繼續導覽」（關卡步驟綁定範例資料的特定列）。
 
-### 4.2 關卡 A「核對一份資料」（8 步）
+### 4.2 關卡 A「核對一份資料」（10 步，v2 起）
 
 用範例 recipe「發票對報關單（範例）」與範例 workbook（見 7.1）。範例資料會產生 7 列需檢查（v2 起），關卡挑其中 5 種情況教，並要求把配對與剩下的列做完才下載（見 onboarding-v2-spec.md）。
 
@@ -404,6 +404,15 @@ pdf-mapper 曾發生「頁面是新的、伺服器是舊的」。新增 `app/dat
 4. 輸出要求：「只輸出要放進這個位置的 YAML，縮排從第 0 欄開始，不要加說明」。
 
 ---
+
+### 6.5 練習中心與 mission（v0.2.1）
+
+- 說明卡的主要動作一律是「開始練習」，不再有「試試看」「帶我去」。檢查類 6 張卡各有一條 mission（`mission-trace`、`mission-source`、`mission-bulk`、`mission-reset`、`mission-popout`、`mission-transform`），用範例資料一步一步做到完成；寫 recipe 的 5 個練習沿用 `labs.json`。
+- mission 與練習共用 Spotlight 引擎、`leaveDemo` 與 `savedWork`，進度存在 `prefs.practiceDone`（舊的 `labsDone` 載入時自動遷移）。
+- 練習中心是 `<dialog id="practiceHub">`，共 11 項，標出已練與建議的下一項。入口四個：說明選單、歡迎畫面、關卡 A 完成畫面、首次自己的資料執行完後的一次性提示。
+- 對話框內的導覽元件依 5.6：指令條與浮標畫在對話框內。第一次開啟且尚未練過任何一項時，浮標指「從這裡開始」。
+- 浮標只寫要做什麼，不寫方向箭頭；目標在畫面外時寫「往上捲」「往下捲」。指令條（`.guide-dock`）sticky，捲動時仍看得到。
+- mission-reset 的 2 筆人工決定用既有 API 寫在範例暫存空間，不寫進 `workspace/reviews`。mission-popout 若瀏覽器擋掉新視窗，可按「跳過這條練習」，不計入完成。
 
 ## 7. 範例資料、練習與後端
 
