@@ -864,7 +864,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .help-hint:hover { background: var(--ink-2); color: var(--text-strong); }
 
 /* 結果表靜默提示 */
-.jk-tip { font-size: 12.5px; color: var(--text); white-space: nowrap; }
+/* 提示只用剩下的空間，放不下就截斷，不把「檢視」選單擠到下一行（擠下去時選單會往左展開、被左欄蓋住） */
+.jk-tip { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: right; font-size: 12.5px; color: var(--text); white-space: nowrap; }
 
 /* 練習面板（#drawer 內） */
 .lab-goal { margin: 0 0 10px; font-size: 13px; color: var(--text-strong); line-height: 1.5; }
