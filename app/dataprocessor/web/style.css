@@ -109,7 +109,11 @@ body.resizing { cursor: col-resize; user-select: none; }
   background: var(--surface); border-right: 1px solid var(--line); overflow-y: auto;
   padding: 16px 12px; display: flex; flex-direction: column; gap: 20px;
 }
-.work { min-width: 0; overflow: auto; padding: 28px 32px 48px; background: var(--well); }
+.work {
+  min-width: 0; overflow: auto; padding: 28px 32px 48px; background: var(--well);
+  /* 導覽的指令條（.guide-dock）蓋在捲動內容上方，捲到目標時要留出它的高度 */
+  scroll-padding-top: calc(var(--guide-dock-h, 0px) + 12px);
+}
 
 /* 獨立視窗：只留結果，表格用滿整個視窗 */
 body.popout .setup, body.popout .pipeline, body.popout .stage-detail, body.popout .manual-link { display: none; }
@@ -191,7 +195,7 @@ button .icon, .button .icon { width: 14px; height: 14px; flex: none; fill: none;
 .recipe-item.active .name { color: var(--accent-text); }
 .recipe-item .desc { margin-top: 1px; font-size: 12px; font-weight: 400; color: var(--text); line-height: 1.45; }
 .recipe-item .bad { margin-top: 1px; font-size: 12px; font-weight: 400; color: var(--danger-text); }
-.recipe-tools { display: flex; gap: 12px; margin-top: 6px; padding: 0 10px; flex-wrap: wrap; }
+.recipe-tools { display: flex; gap: 12px; align-items: center; min-height: 28px; margin-top: 4px; padding: 0 10px; flex-wrap: wrap; }
 .drop {
   display: block; width: 100%; padding: 14px; background: var(--canvas); border: 1.5px dashed var(--ink-5);
   border-radius: var(--radius-md); text-align: center; color: var(--text); font-size: 13px; font-weight: 500; cursor: pointer;
@@ -513,7 +517,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
 .flow-detail summary { cursor: pointer; font-size: 12.5px; color: var(--accent-text); }
 .flow-detail .flow-children { padding-left: 14px; border-left: 1px solid var(--ink-3); }
 .explain-code { margin-top: 4px; }
-.explain-code summary { font-size: 12px; }
+.explain-code summary { font-size: 12px; width: fit-content; }
 .explain-code pre { margin: 6px 0 0; padding: 8px 10px; border-radius: var(--radius-md); background: var(--canvas); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .problems {
   margin: 0; padding: 10px 14px 10px 30px; border-radius: var(--radius-md); background: var(--danger-soft);
@@ -723,10 +727,16 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .welcome-secondary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .welcome-note { margin: 14px 0 0; font-size: 12.5px; color: var(--text); }
 
-/* 導覽進度列（#guideBar）與指令條（#missionStrip） */
+/* 導覽進度列（#guideBar）與指令條（#missionStrip）一起放在 .guide-dock：在 .work 裡 sticky 貼在最上面，
+   捲到表格或配對卡片時仍看得到現在要做什麼。負的 margin 抵銷 .work 的內距，讓 dock 貼齊邊緣。 */
+.guide-dock {
+  position: sticky; top: -28px; z-index: 30; margin: -28px -32px 16px;
+  background: var(--well); border-bottom: 1px solid var(--line);
+}
+.guide-dock:not(:has(> :not([hidden]))) { display: none; }
 .guide-bar {
   display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 12px;
-  margin: -28px -32px 0; background: var(--surface); border-bottom: 1px solid var(--line);
+  background: var(--surface); border-bottom: 1px solid var(--line);
   white-space: nowrap; overflow: hidden;
 }
 .guide-dots { display: inline-flex; align-items: center; flex: none; }
@@ -756,7 +766,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 
 .mission-strip {
   display: flex; align-items: center; gap: 12px; min-height: 52px;
-  margin: 8px -20px 14px; padding: 10px 12px;
+  margin: 8px 12px; padding: 10px 12px;
   background: var(--accent-soft);
   border: 1px solid var(--accent-line); border-radius: var(--radius-md);
 }
@@ -789,6 +799,10 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .dialog-guide .mission-action { font-size: 13.5px; }
 .dialog-guide .mission-tip { font-size: 12.5px; }
 
+/* 進度列左側的「進階：標題」 */
+.guide-journey { flex: none; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; font-weight: 600; color: var(--text-strong); }
+.guide-journey::after { content: ""; display: inline-block; width: 1px; height: 12px; margin-left: 10px; vertical-align: -2px; background: var(--ink-4); }
+
 /* 三色圖例 */
 .status-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12.5px; color: var(--text-strong); }
 .status-legend-item { display: inline-flex; align-items: center; gap: 5px; }
@@ -808,13 +822,15 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .guide-pointer::after {
   content: ""; position: absolute; width: 0; height: 0; border: 6px solid transparent;
 }
-.guide-pointer[data-side="right"]::after { right: 100%; top: 50%; transform: translateY(-50%); border-right-color: var(--accent); }
-.guide-pointer[data-side="left"]::after { left: 100%; top: 50%; transform: translateY(-50%); border-left-color: var(--accent); }
-.guide-pointer[data-side="bottom"]::after { bottom: 100%; left: 50%; transform: translateX(-50%); border-bottom-color: var(--accent); }
-.guide-pointer[data-side="top"]::after { top: 100%; left: 50%; transform: translateX(-50%); border-top-color: var(--accent); }
-.guide-pointer[data-side="offscreen"]::after { display: none; }
+/* 三角形永遠指向目標（data-dir 是三角形指的方向）；--tip 讓它對準目標的中心 */
+.guide-pointer[data-dir="left"]::after { right: 100%; top: var(--tip, 50%); transform: translateY(-50%); border-right-color: var(--accent); }
+.guide-pointer[data-dir="right"]::after { left: 100%; top: var(--tip, 50%); transform: translateY(-50%); border-left-color: var(--accent); }
+.guide-pointer[data-dir="up"]::after { bottom: 100%; left: var(--tip, 50%); transform: translateX(-50%); border-bottom-color: var(--accent); }
+.guide-pointer[data-dir="down"]::after { top: 100%; left: var(--tip, 50%); transform: translateX(-50%); border-top-color: var(--accent); }
 
 .guide-target { outline: 2px solid var(--accent) !important; outline-offset: 3px; }
+/* 平常滑過才出現的小按鈕（例如「怎麼來的」），練習要指它時先顯示出來 */
+.guide-reveal { opacity: 1 !important; }
 .guide-outline {
   position: fixed; z-index: 55; pointer-events: none;
   border: 1.5px dashed var(--outline-ink); border-radius: var(--radius-sm);
@@ -837,6 +853,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
   font-size: 12.5px; color: var(--text-strong);
 }
 .float-card-example code { font-family: var(--mono); font-size: 12.5px; background: var(--surface); padding: 1px 4px; border-radius: 4px; }
+.float-card-where { margin: 8px 0 0; font-size: 12.5px; color: var(--text); line-height: 1.5; }
 .float-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 
 .help-group-title {
@@ -891,6 +908,29 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .lab-done-box { padding: 12px; background: var(--success-soft); border-radius: var(--radius-md); }
 .lab-done-box p { margin: 0 0 10px; font-size: 13px; color: var(--text-strong); font-weight: 500; }
 
+/* 練習中心（#practiceHub）：寬 720，最高 100vh - 96px 可捲動，兩欄卡片，不夠寬時一欄 */
+.practice-hub { width: min(720px, 92vw); max-height: calc(100vh - 96px); overflow-y: auto; }
+.practice-hub .dialog-head { align-items: center; }
+.practice-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.practice-count { font-size: 12.5px; font-weight: 500; color: var(--accent-text); white-space: nowrap; }
+.practice-sub { color: var(--text); }
+.practice-group-title { margin: 6px 0 8px; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.practice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.practice-card {
+  display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; min-width: 0;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
+}
+.practice-card.next { border-color: var(--accent); }
+.practice-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.practice-card-head strong { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.practice-check { font-size: 13px; font-weight: 600; color: var(--success-text); }
+.practice-when { margin: 0; font-size: 12.5px; color: var(--text); line-height: 1.45; }
+.practice-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 4px; }
+.practice-time { font-size: 12.5px; color: var(--text-faint); }
+@media (max-width: 1000px) {
+  .practice-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* 新功能小卡 */
 .whatsnew-list { list-style: none; margin: 6px 0 10px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .whatsnew-list li { font-size: 12.5px; color: var(--text-strong); }
@@ -909,8 +949,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* 900px 以下（非主要支援，仍保持可用）：指令條兩行、歡迎卡滿寬 */
 @media (max-width: 899px) {
   .work { padding: 16px 16px 32px; }
-  .guide-bar { margin: -16px -16px 0; }
-  .mission-strip { flex-wrap: wrap; margin: 8px 0 12px; gap: 8px 10px; }
+  .guide-dock { top: -16px; margin: -16px -16px 12px; }
+  .mission-strip { flex-wrap: wrap; margin: 8px 12px; gap: 8px 10px; }
   .mission-main { flex: 1 1 calc(100% - 36px); }
   .mission-actions { width: 100%; justify-content: flex-end; }
   .welcome { max-width: 100%; width: 100%; margin-top: 12px; }
@@ -919,6 +959,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* popout 隱藏所有導覽與教學元件 */
 body.popout #helpBtn,
 body.popout #versionBanner,
+body.popout .guide-dock,
 body.popout #guideBar,
 body.popout #missionStrip,
 body.popout #guidePointer,

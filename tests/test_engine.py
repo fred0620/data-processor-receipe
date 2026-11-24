@@ -322,8 +322,10 @@ def test_confirmed_match_leaves_todo_and_validate_card_counts_dismissed(env):
     assert row["status"] == "confirmed"                           # 確認後不再算待處理
     assert result["matches"][0]["counts"]["review"] == 0
     validate = next(s for s in result["stages"] if s["id"] == "validate")
-    assert validate["status"] == "confirmed" and validate["summary"] == "已處理 1 列"
-    assert validate["checks"][0]["done"] == validate["checks"][0]["rows"] == 1
+    flagged = sum(1 for i in result["issues"] if i["code"] == "check0")   # 範例有兩列金額和報關金額不同
+    assert flagged == 2
+    assert validate["status"] == "confirmed" and validate["summary"] == f"已處理 {flagged} 列"
+    assert validate["checks"][0]["done"] == validate["checks"][0]["rows"] == flagged
 
 
 def test_same_right_row_assigned_twice_is_flagged(env):
@@ -357,8 +359,9 @@ def test_validate_fixed_by_edit_stays_as_record(env):
     flagged = [i for i in result["issues"] if i["code"] == "check0" and not i["dismissed"]]
     assert flagged
     rid = flagged[0]["rid"]
-    row = next(r for r in result["output"]["rows"] if r["rid"] == rid)
-    review.set_edit(rid, "金額", row["values"]["金額"], row["values"]["報關金額"])   # 改成和報關金額一樣
+    for issue in flagged:                                         # 每一列都改成和報關金額一樣
+        row = next(r for r in result["output"]["rows"] if r["rid"] == issue["rid"])
+        review.set_edit(issue["rid"], "金額", row["values"]["金額"], row["values"]["報關金額"])
     review.save()
     result, _, _ = env()
     kept = [i for i in result["issues"] if i["code"] == "check0" and i["rid"] == rid]

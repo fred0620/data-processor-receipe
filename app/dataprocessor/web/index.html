@@ -42,8 +42,10 @@
   </aside>
 
   <main class="work">
-    <div id="guideBar" class="guide-bar" hidden></div>
-    <div id="missionStrip" class="mission-strip" aria-live="polite" aria-atomic="true" hidden></div>
+    <div class="guide-dock">
+      <div id="guideBar" class="guide-bar" hidden></div>
+      <div id="missionStrip" class="mission-strip" aria-live="polite" aria-atomic="true" hidden></div>
+    </div>
 
     <section id="empty" class="empty">
       <h2>選好 recipe 與資料檔後按「執行」</h2>
@@ -91,6 +93,8 @@
     <div class="dialog-actions" id="dialogActions"></div>
   </form>
 </dialog>
+
+<dialog id="practiceHub" class="dialog practice-hub" aria-label="進階功能練習"></dialog>
 
 <div id="toast" class="toast" role="alert" hidden></div>
 <script src="/web/spotlights.js"></script>

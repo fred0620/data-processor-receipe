@@ -6,6 +6,8 @@ from pathlib import Path
 
 from playwright.sync_api import expect
 
+from guide_checks import assert_pointer_text_and_direction
+
 ROOT = Path(__file__).resolve().parents[2]
 LABS = {item["id"]: item for item in json.loads((ROOT / "app" / "dataprocessor" / "demo" / "labs.json").read_text(encoding="utf-8"))["labs"]}
 
@@ -26,6 +28,7 @@ def _assert_lab_pointer_not_covering_buttons(page):
       return null;
     }""")
     assert overlap is None, f"練習浮標蓋住按鈕：{overlap}"
+    assert_pointer_text_and_direction(page)
 
 
 def test_lab_match_full_flow_pointer_clear_and_work_restore(ui):
@@ -40,7 +43,7 @@ def test_lab_match_full_flow_pointer_clear_and_work_restore(ui):
     expect(page.locator("#helpPopover")).to_be_visible()
     page.click('#helpPopover button:has-text("號碼寫法不同也配得到")')
     expect(page.locator("#helpCard")).to_be_visible()
-    page.click('#helpCard button:has-text("實地練習")')
+    page.click('#helpCard button:has-text("開始練習")')
     expect(page.locator('[data-guide="lab-editor"]')).to_be_visible()
 
     # 練習 recipe 不出現在左欄清單
@@ -98,7 +101,7 @@ def test_all_other_labs_pass_in_ui(ui):
         expect(page.locator("#helpPopover")).to_be_visible()
         page.click(f'#helpPopover button:has-text("{lab["title"]}")')
         expect(page.locator("#helpCard")).to_be_visible()
-        page.click('#helpCard button:has-text("實地練習")')
+        page.click('#helpCard button:has-text("開始練習")')
         expect(page.locator('[data-guide="lab-editor"]')).to_be_visible()
 
         editor = page.locator('[data-guide="lab-editor"]')

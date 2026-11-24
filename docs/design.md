@@ -151,3 +151,7 @@
 - **對話框內畫導覽**：新增 recipe 使用原生 `<dialog>` 的 `showModal()` 位於瀏覽器 top layer，外面的浮標會被蓋住；關卡 B 在對話框開啟時把精簡指令條 `.dialog-guide` 與 `#guidePointer` 畫進 `#dialog` 內，關閉時移回。
 - **不提供「在目前資料上繼續導覽」**：本工具的人工決定本來就會自動保存，關卡步驟則綁定範例資料的特定列；使用者已有工作時先詢問並記下狀態，走完或結束後按「回到我的工作」用 `GET /api/runs/<id>` 原樣接回。
 - **`returning` 判斷**：從 0.1.0 升上來的使用者沒有 `whatsnewSeen`，由 `/api/status` 檢查 `workspace/reviews`、`workspace/mappings` 或範例以外的 recipe 來判斷 `returning: true`，避免全新使用者一開啟就被新功能小卡打斷。範例 recipe 要名稱和內容都和內建的一樣才不算（`invoice-declaration` 比對 `examples/workspace`、`practice-invoice` 比對 `demo/recipe-fixed.yaml`，忽略 BOM 與換行差異），使用者改過或自己同名的 recipe 一律算 returning。
+- **進階功能一律帶到完成（0.2.1）**：說明卡的動作是「開始練習」，不是只打開功能；6 條 mission 與 5 個 recipe 練習放進「練習中心」，共用同一個引擎、`leaveDemo` 與 `savedWork`，進度記在 `prefs.practiceDone`。mission 開始時先 `/reset` 清掉範例暫存空間裡上一次留下的人工決定（暫存審核紀錄以 recipe 與 workbook 雜湊為鍵，會跨次保留），mission-reset 的前置決定同樣只寫暫存空間。
+- **浮標不寫方向，指令條 sticky**：浮標只說要做什麼，目標在畫面外才寫「往上捲」「往下捲」；`.guide-dock` 用 sticky，捲到表格下方仍看得到進度與指令。只在 hover 時才出現的按鈕（例如「為什麼」）用 `reveal` 強調模式強制顯示。
+- **關卡 A 要做完才下載**：配對與需檢查的列都處理完才進到下載步驟，沒做完就下載只提醒，不算完成，避免新手以為做完了其實還有列沒看。
+- **popout 選取同步**：popout 視窗點選的列透過 BroadcastChannel 的 `select` 訊息同步到主視窗，mission-popout 才量得到「兩個視窗對同一列」。

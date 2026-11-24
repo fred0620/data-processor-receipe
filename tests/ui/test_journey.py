@@ -12,17 +12,17 @@ def test_first_row_opens_and_confirm_moves_to_next(ui):
     first = ui.state("state.selected")
     assert first == ui.state("visibleRows()[0].rid")
     assert page.locator("table.grid tr.selected").count() == 1
-    assert "需檢查 1 / 6" in page.inner_text(".drawer-foot")
+    assert "需檢查 1 / 7" in page.inner_text(".drawer-foot")
     progress = page.inner_text("#progress")
-    assert "已處理 0 / 6 列" in progress
+    assert "已處理 0 / 7 列" in progress
     # 確認無誤，下一筆
     before = _open_count(ui)
     page.click(".drawer-foot button.primary")
     ui.settle()
     assert _open_count(ui) == before - 1
     second = ui.state("state.selected")
-    assert second and second != first and "需檢查 1 / 5" in page.inner_text(".drawer-foot")
-    assert "已處理 1 / 6 列" in page.inner_text("#progress")
+    assert second and second != first and "需檢查 1 / 6" in page.inner_text(".drawer-foot")
+    assert "已處理 1 / 7 列" in page.inner_text("#progress")
     assert page.locator("#progress .meter i").evaluate("e => parseFloat(e.style.width)") > 0
     ui.shot("journey")
 
@@ -32,7 +32,7 @@ def test_keyboard_and_buttons_move_between_rows(ui):
     first = ui.state("state.selected")
     page.keyboard.press("j")
     second = ui.state("state.selected")
-    assert second != first and "需檢查 2 / 6" in page.inner_text(".drawer-foot")
+    assert second != first and "需檢查 2 / 7" in page.inner_text(".drawer-foot")
     page.keyboard.press("k")
     assert ui.state("state.selected") == first
     page.click(".drawer-foot button[aria-label='下一筆（J）']")

@@ -49,7 +49,7 @@ def main() -> None:
                   localStorage.setItem('dp:onboarding.v1', JSON.stringify({
                     dismissed: true,
                     journeys: { review: { step: null, done: true, skipped: [] }, recipe: { step: null, done: true, skipped: [] } },
-                    cardsSeen: [], labsDone: [], tipsSeen: { jk: 3 }, whatsnewSeen: '9.9.9'
+                    cardsSeen: [], practiceDone: [], tipsSeen: { jk: 3 }, whatsnewSeen: '9.9.9'
                   }));
                 }""")
                 page.reload()
