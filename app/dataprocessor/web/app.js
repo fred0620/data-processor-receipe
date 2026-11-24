@@ -240,17 +240,22 @@ function setupPanes() {
       prefs.set(`${name}Width`, paneWidth(name, now + (pane.edge === "left" ? step : -step)));
     });
   }
-  const collapse = (on) => {
+  const collapse = (on, save = true) => {
     layout.classList.toggle("side-collapsed", on);
     $("sideToggle").title = on ? "展開左欄" : "收起左欄";
     $("sideToggle").setAttribute("aria-label", $("sideToggle").title);
     $("sideToggle").setAttribute("aria-pressed", String(on));
-    prefs.set("sideCollapsed", on);
+    if (save) prefs.set("sideCollapsed", on);
   };
-  collapse(prefs.get("sideCollapsed", false));
-  $("sideToggle").addEventListener("click", () => collapse(!layout.classList.contains("side-collapsed")));
+  const syncNarrow = () => {
+    if (window.innerWidth < 900) collapse(true, false);
+    else collapse(prefs.get("sideCollapsed", false), false);
+  };
+  syncNarrow();
+  $("sideToggle").addEventListener("click", () => collapse(!layout.classList.contains("side-collapsed"), true));
   window.addEventListener("resize", () => {
     for (const [name, pane] of Object.entries(PANES)) paneWidth(name, prefs.get(`${name}Width`, pane.fallback));
+    syncNarrow();
   });
 }
 
@@ -265,6 +270,8 @@ async function loadRecipes(selectId) {
   renderRecipes();
 }
 
+const guide = () => window.Spotlights?.engine || null;
+
 function renderRecipes() {
   const list = $("recipeList");
   if (!state.recipes.length) {
@@ -275,7 +282,7 @@ function renderRecipes() {
         type: "button", class: `recipe-item${r.id === state.recipeId ? " active" : ""}`,
         onclick: () => { state.recipeId = r.id; renderRecipes(); },
       },
-      el("div", { class: "name", text: r.name }),
+      el("div", { class: "name" }, r.name, r.practice ? el("span", { class: "demo-tag", text: "練習" }) : null),
       r.description ? el("div", { class: "desc", text: r.description }) : null,
       r.problems.length ? el("div", { class: "bad", text: `有 ${r.problems.length} 個問題，無法使用` }) : null),
       r.id === state.recipeId ? el("div", { class: "recipe-tools" },
@@ -337,7 +344,10 @@ async function deleteRecipe(recipe) {
 }
 
 async function copySpec() {
-  try { copyText((await api("/api/spec")).text); } catch (error) { showError(error); }
+  try {
+    copyText((await api("/api/spec")).text);
+    guide()?.notify("spec-copied");
+  } catch (error) { showError(error); }
 }
 
 function editRecipe(text = "") {
@@ -349,17 +359,25 @@ function editRecipe(text = "") {
   const showProblems = (error) => {
     if (!error.problems.length) { toast(error.message, true); return; }
     put(problems, el("ul", { class: "problems" }, error.problems.map((p) => el("li", { text: p }))),
-      el("button", { type: "button", class: "link", text: "複製問題給 AI", onclick: () => copyText(problemsText(error.problems)) }));
+      el("button", {
+        type: "button", class: "link", text: "複製問題給 AI", dataset: { guide: "problems-copy" },
+        onclick: () => { copyText(problemsText(error.problems)); guide()?.notify("problems-copied"); },
+      }));
+    guide()?.notify("problems-shown");
   };
   const save = async () => {
     try {
-      const data = await post("/api/recipes", { text: area.value });
+      const payload = { text: area.value };
+      if (guide()?.isJourneyBActive()) payload.practice = true;
+      const data = await post("/api/recipes", payload);
       closeDialog();
       await loadRecipes(data.id);
+      if (data.practice) guide()?.notify("practice-saved");
       /* 正在看的結果用的就是這份 recipe：直接用新版重新處理，人工修改與確認都會保留 */
       if (state.result && state.result.recipe.id === data.id && await act("rerun")) {
         toast(`已儲存「${data.name}」，並用新版重新處理目前的檔案`);
       } else toast(`已儲存「${data.name}」`);
+      guide()?.schedule();
     } catch (error) { editStep(); showProblems(error); }
   };
   /* 第二步：先看白話說明，確認邏輯對了才存 */
@@ -371,19 +389,25 @@ function editRecipe(text = "") {
         explainView(info),
       ], [
         btn({ text: "返回修改", icon: "left", variant: "default", size: "normal", onclick: editStep }),
-        el("button", { type: "button", class: "primary", text: "確認並儲存", onclick: save }),
+        el("button", { type: "button", class: "primary", text: "確認並儲存", dataset: { guide: "recipe-save" }, onclick: save }),
       ]);
+      guide()?.notify("explain-shown");
     } catch (error) { showProblems(error); }
   };
-  const editStep = () => openDialog("新增或更新 recipe", [
-    el("p", { class: "muted" }, "先把規格複製給 AI，連同你的欄位與處理規則請它寫 recipe，再貼回這裡。下一步會把 recipe 翻成白話讓你確認。 ",
-      el("button", { type: "button", class: "link accent", text: "複製規格給 AI", onclick: copySpec })),
-    area, problems,
-  ], [
-    btn({ text: "選擇檔案", variant: "default", size: "normal", onclick: () => file.click() }), file,
-    btn({ text: "取消", size: "normal", onclick: closeDialog }),
-    el("button", { type: "button", class: "primary", text: "下一步：確認說明", onclick: review }),
-  ]);
+  const editStep = () => {
+    openDialog("新增或更新 recipe", [
+      el("p", { class: "muted" }, "先把規格複製給 AI，連同你的欄位與處理規則請它寫 recipe，再貼回這裡。下一步會把 recipe 翻成白話讓你確認。 ",
+        el("button", { type: "button", class: "link accent", text: "複製規格給 AI", dataset: { guide: "spec-copy" }, onclick: copySpec })),
+      area, problems,
+    ], [
+      btn({ text: "選擇檔案", variant: "default", size: "normal", onclick: () => file.click() }), file,
+      btn({ text: "取消", size: "normal", onclick: closeDialog }),
+      el("button", { type: "button", class: "primary", text: "下一步：確認說明", dataset: { guide: "recipe-next" }, onclick: review }),
+    ]);
+    const hint = guide()?.hintButton("recipe-overview", "寫 recipe");
+    if (hint) $("dialogTitle").append(hint);
+    guide()?.notify("recipe-dialog");
+  };
   editStep();
 }
 
@@ -392,6 +416,7 @@ async function uploadWorkbook(file) {
   const form = new FormData();
   form.append("file", file);
   try {
+    guide()?.clearSavedWork();
     setWorkbook(await api("/api/workbooks", { method: "POST", body: form }));
   } catch (error) { showError(error); }
 }
@@ -410,20 +435,23 @@ async function loadSamples() {
     const data = await api("/api/samples");
     $("sampleBox").replaceChildren(...data.samples.map((name) => el("button", {
       type: "button", class: "link", text: `使用範例：${name}`,
-      onclick: async () => { try { setWorkbook(await post(`/api/samples/${encodeURIComponent(name)}`)); } catch (error) { showError(error); } },
+      onclick: async () => { try { guide()?.clearSavedWork(); setWorkbook(await post(`/api/samples/${encodeURIComponent(name)}`)); } catch (error) { showError(error); } },
     })));
   } catch (_error) { /* 沒有範例就不顯示 */ }
 }
 
 function updateRunButton() {
+  const isDemoRecipe = Boolean(state.recipeId && (state.recipeId.startsWith("demo:") || state.recipeId.startsWith("practice:")));
   const recipe = state.recipes.find((r) => r.id === state.recipeId);
-  $("runButton").disabled = !(recipe && !recipe.problems.length && state.workbook);
+  $("runButton").disabled = !((isDemoRecipe || (recipe && !recipe.problems.length)) && state.workbook);
 }
 
 async function runNow() {
   try {
     state.selected = null;
     state.checked.clear();
+    const isDemo = Boolean((state.recipeId && (state.recipeId.startsWith("demo:") || state.recipeId.startsWith("practice:"))) || state.workbook?.demo);
+    if (!isDemo) guide()?.clearSavedWork();
     setResult(await post("/api/runs", { recipe: state.recipeId, workbook: state.workbook.id }), true);
   } catch (error) { showError(error, "無法執行"); }
 }
@@ -432,8 +460,14 @@ async function runNow() {
 async function act(path, body) {
   try {
     setResult(await post(`/api/runs/${state.result.run_id}/${path}`, body));
+    if (path === "edit") guide()?.notify("good-edit");
+    guide()?.schedule();
     return true;
-  } catch (error) { showError(error); return false; }
+  } catch (error) {
+    if (path === "edit") guide()?.notify("bad-edit", { column: body?.column, value: body?.value ?? "" });
+    showError(error);
+    return false;
+  }
 }
 
 /* ---------- Pop out / Pop in ---------- */
@@ -631,13 +665,16 @@ function setResult(result, fresh = false, remote = false) {
   const status = $("runStatus");
   status.hidden = false;
   put(status, el("span", { class: `dot ${result.status === "error" ? "error" : reviewRows ? "review" : "ok"}` }),
-    result.status === "error" ? "無法執行" : reviewRows ? `${reviewRows} 列需檢查` : "全部處理完");
+    result.status === "error" ? "無法執行" : reviewRows ? `${reviewRows} 列需檢查` : "全部處理完",
+    result.demo ? el("span", { class: "demo-tag", text: "範例" }) : null);
   renderProgress(result);
   $("exportButton").href = `/api/runs/${result.run_id}/export`;
   resetButton(result);
   $("exportButton").toggleAttribute("hidden", result.status === "error");
   renderPipeline();
   renderTabs();
+  if (remote) guide()?.notify("remote-result");
+  else guide()?.schedule();
 }
 
 /* 檢查進度（Stageshow 的 Meter）：需要人看的列裡，已經處理了幾列 */
@@ -662,7 +699,13 @@ function renderPipeline() {
   put($("pipeline"), stages.map((stage) => el("li", {},
     el("button", {
       type: "button", class: `stage ${stage.status}${state.stageOpen === stage.id ? " open" : ""}`,
-      onclick: () => { state.stageOpen = state.stageOpen === stage.id ? null : stage.id; renderPipeline(); },
+      dataset: { guide: `stage-${stage.id}` },
+      onclick: () => {
+        const opening = state.stageOpen !== stage.id;
+        state.stageOpen = opening ? stage.id : null;
+        renderPipeline();
+        if (opening) guide()?.notify("stage-open", { id: stage.id, status: stage.status });
+      },
     },
     el("span", { class: "label" }, el("span", { class: `dot ${stage.status === "skip" ? "" : stage.status}` }), STAGE_TEXT[stage.id]),
     el("span", { class: "summary", text: stage.summary || (stage.status === "skip" ? "未執行" : "") })))));
@@ -744,17 +787,19 @@ function renderTabs() {
   const away = (id) => !isPopout && popped.has(id);
   put($("tabs"), tabs.map(([id, label, n, plain]) => el("button", {
     type: "button", class: `tab${state.tab === id ? " active" : ""}${away(id) ? " away" : ""}`,
+    dataset: { tab: id },
     title: away(id) ? "在 pop out 視窗" : null,
-    onclick: () => { if (!isPopout) { state.tab = id; state.issueFocus = null; renderTabs(); } },
+    onclick: () => { if (!isPopout) { state.tab = id; state.issueFocus = null; renderTabs(); guide()?.notify("tab-change", { tab: id }); } },
   }, label, away(id) ? el("span", { class: "away-mark", text: "↗" }) : null,
   n ? el("span", { class: `count${plain ? "" : " review"}`, text: n }) : null)),
   isPopout ? null : el("div", { class: "tab-tools" },
-    popped.size ? btn({ text: "全部 Pop in", icon: "popin", onclick: popInAll }) : null,
-    away(state.tab) ? null : btn({ text: "Pop out", icon: "external", onclick: popOut,
+    popped.size ? btn({ text: "全部 Pop in", icon: "popin", dataset: { guide: "popin-all" }, onclick: popInAll }) : null,
+    away(state.tab) ? null : btn({ text: "Pop out", icon: "external", dataset: { guide: "popout-btn" }, onclick: popOut,
       title: "把這個分頁搬到另一個視窗，可以拖到另一個螢幕看完整的表格。兩邊的修改會同步。" })));
   if (away(state.tab)) renderPoppedNote();
   else ({ rows: renderRows, match: renderMatch, mapping: renderMapping, excluded: renderExcluded, issues: renderIssues, source: renderSource })[state.tab]();
   renderDrawer();
+  guide()?.schedule();
 }
 
 function chips(options, current, onPick) {
@@ -861,7 +906,8 @@ function renderRows(keepMenu = false) {
     el("thead", {}, el("tr", {}, el("th", { class: "status-col" }), el("th", { text: "列" }), columns.map((c) => el("th", { text: c.name, title: c.name })))),
     el("tbody", {}, rows.slice(0, 2000).map((row) => el("tr", {
       class: state.selected === row.rid ? "selected" : null,
-      onclick: () => { state.selected = row.rid; renderTabs(); },
+      dataset: { rid: row.rid },
+      onclick: () => { state.selected = row.rid; renderTabs(); guide()?.notify("row-select", { rid: row.rid }); },
     },
     el("td", { class: "status-col" }, el("span", { class: `dot ${row.status}` })),
     el("td", { class: "rowno", text: row.row ?? "", title: row.sheet ? `${row.sheet}・第 ${row.row} 列` : null }),
@@ -888,6 +934,7 @@ function renderRows(keepMenu = false) {
       chips([["review", "需檢查"], ["confirmed", "已確認"], ["all", "全部"]], state.filter, (id) => { state.filter = id; renderTabs(); }),
       searchBox(state.search, "搜尋", (v) => { state.search = v; renderRows(); }, "rows"),
       el("span", { class: "spacer" }),
+      guide()?.shouldShowJkTip() ? el("span", { class: "jk-tip", text: "點一列看細節，J／K 換列" }) : null,
       el("span", { class: "muted", text: `${rows.length} 列` }),
       menu),
     rows.length ? el("div", { class: "table-wrap" }, table)
@@ -910,7 +957,7 @@ function inlineMapping(entry) {
     act("mapping", { mapping: entry.mapping, raw: entry.raw, target, new_value });
   };
   return el("div", { class: "inline-fix" }, control.node,
-    el("button", { type: "button", class: "small", text: "補上對照", onclick: save }),
+    el("button", { type: "button", class: "small", text: "補上對照", dataset: { guide: "map-save" }, onclick: save }),
     entry.count > 1 ? el("span", { class: "muted", text: `其他 ${entry.count - 1} 處也會一起補上` }) : null);
 }
 
@@ -943,7 +990,11 @@ function issueLine(issue, extra = null, inline = false) {
     actions.push(el("button", { type: "button", class: "link", text: "補對照", onclick: () => goTo({ tab: "mapping" }) }));
   }
   if (inline && issue.stage === "validate" && state.selected) {   // 細節裡：展開處理過程，看規則和用到的每個值
-    actions.push(el("button", { type: "button", class: "link", text: "怎麼判斷的", onclick: () => showRowTrace(issue.message) }));
+    actions.push(el("button", {
+      type: "button", class: "link", text: "怎麼判斷的",
+      dataset: { guide: "issue-trace", rid: state.selected },
+      onclick: () => showRowTrace(issue.message),
+    }));
   }
   if (extra) actions.push(extra);
   if (issue.level !== "error" && !issue.resolved) {   // 修改、補對照、配對要到原本的地方還原
@@ -962,6 +1013,10 @@ function issueLine(issue, extra = null, inline = false) {
 }
 
 function renderDrawer() {
+  if (guide()?.isLabActive()) {
+    guide().renderLabDrawer();
+    return;
+  }
   const r = state.result;
   /* 看原始資料時細節也留著，可以左右對照 */
   const row = r && (state.tab === "rows" || state.tab === "source") && r.output.rows.find((x) => x.rid === state.selected);
@@ -975,8 +1030,8 @@ function renderDrawer() {
     /* 文字欄位用會自動長高的文字框，多行內容不會被截掉；Enter 儲存，Shift+Enter 換行 */
     const multiline = c.type === "text";
     const input = multiline
-      ? el("textarea", { rows: 1, disabled: !c.editable, placeholder: row.raw[c.name] ? `原始：${row.raw[c.name]}` : "" })
-      : el("input", { value: row.values[c.name] ?? "", disabled: !c.editable, placeholder: row.raw[c.name] ? `原始：${row.raw[c.name]}` : "" });
+      ? el("textarea", { rows: 1, disabled: !c.editable, dataset: { guide: `field-${c.name}`, rid: row.rid }, placeholder: row.raw[c.name] ? `原始：${row.raw[c.name]}` : "" })
+      : el("input", { value: row.values[c.name] ?? "", disabled: !c.editable, dataset: { guide: `field-${c.name}`, rid: row.rid }, placeholder: row.raw[c.name] ? `原始：${row.raw[c.name]}` : "" });
     if (multiline) {
       input.value = row.values[c.name] ?? "";
       const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 220)}px`; };
@@ -984,7 +1039,13 @@ function renderDrawer() {
       requestAnimationFrame(grow);
     }
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !(multiline && e.shiftKey)) { e.preventDefault(); input.blur(); }
+      if (e.key === "Enter" && !(multiline && e.shiftKey)) {
+        e.preventDefault();
+        if (String(input.value) === String(row.values[c.name] ?? "") && input.value.trim() === "" && (c.type === "number" || c.type === "integer")) {
+          guide()?.notify("bad-edit", { column: c.name, value: "" });
+        }
+        input.blur();
+      }
       if (e.key === "Escape") { input.value = row.values[c.name] ?? ""; input.blur(); }
     });
     input.addEventListener("change", () => {
@@ -1076,8 +1137,11 @@ function renderDrawerFoot(row) {
       el("button", { type: "button", class: "small", disabled: !next, title: "先跳過這一列，之後再回來", onclick: () => next && selectRow(next.rid) },
         el("span", { text: "跳過" }), kbd("J")));
   } else if (judge.length) {
-    action = el("button", { type: "button", class: "primary small", title: "確認這一列的警示都沒問題，然後看下一筆",
-      onclick: () => confirmAndNext(row) }, icon("check"), el("span", { text: judge.length > 1 ? `確認 ${judge.length} 個警示，下一筆` : "確認無誤，下一筆" }));
+    action = el("button", {
+      type: "button", class: "primary small", dataset: { guide: "confirm-next" },
+      title: "確認這一列的警示都沒問題，然後看下一筆",
+      onclick: () => confirmAndNext(row),
+    }, icon("check"), el("span", { text: judge.length > 1 ? `確認 ${judge.length} 個警示，下一筆` : "確認無誤，下一筆" }));
   } else {
     action = el("button", { type: "button", class: "small", disabled: !next, onclick: () => next && selectRow(next.rid) },
       el("span", { text: "下一筆" }), kbd("J"));
@@ -1108,6 +1172,7 @@ function showRowTrace(message) {
   traceFocus = message;
   state.openTrace.add(`${state.selected}\u0000*`);
   renderDrawer();
+  guide()?.notify("trace-open", { rid: state.selected, message });
 }
 
 function traceList(row, pick) {
@@ -1167,11 +1232,15 @@ function valuesList(values, columns, compare) {
 }
 
 /* 一列的辨識資訊：辨識欄位（例如發票號碼）加上 Excel 列號，讓人分得出是哪一筆 */
-function rowTitle(record, titleColumns, rid = null, partner = null) {
+function rowTitle(record, titleColumns, rid = null, partner = null, guideTag = null) {
   const place = rid ? sourcePlace(rid) : null;
   if (place && partner) place.partner = sourcePlace(partner);   // 配對的另一邊：完整工作表時並排
-  const link = place ? btn({ icon: "sheet", variant: "quiet", label: `看原始資料：${place.sheet} 第 ${place.row} 列`,
-    extra: "row-source", onclick: (e) => openSource(place, e.currentTarget) }) : null;
+  const link = place ? btn({
+    icon: "sheet", variant: "quiet", label: `看原始資料：${place.sheet} 第 ${place.row} 列`,
+    extra: "row-source",
+    dataset: guideTag ? { guide: guideTag, rid } : undefined,
+    onclick: (e) => openSource(place, e.currentTarget),
+  }) : null;
   const title = rowTitleText(record, titleColumns);
   if (link) title.append(link);
   return title;
@@ -1217,6 +1286,7 @@ function renderMatch() {
       chips([["todo", `需處理 ${c.todo}`], ["all", `全部 ${match.rows.length}`],
         ["manual", `已確認 ${match.rows.filter((x) => ["manual", "none", "confirmed"].includes(x.status) || x.acknowledged).length}`]],
         state.matchFilter, (id) => { Object.assign(state, { matchFilter: id, matchFocus: null }); renderTabs(); }),
+      guide()?.hintButton("card-source", "兩張表並排，找配對的答案"),
       searchBox(state.matchSearch, "搜尋", (v) => { state.matchSearch = v; renderMatch(); }, "match"),
       state.matchFocus ? btn({ text: "顯示全部", onclick: () => { state.matchFocus = null; renderTabs(); } }) : null,
       el("span", { class: "spacer" }),
@@ -1257,7 +1327,7 @@ function matchCard(match, row) {
   if (reviewIssue && row.status === "confirmed") actions.push(el("button", { type: "button", class: "small ghost", text: "取消確認", onclick: () => act("dismiss", { keys: [reviewIssue.key], on: false }) }));
   if (row.status === "manual" || row.status === "none") actions.push(el("button", { type: "button", class: "small ghost", text: "交回自動", onclick: () => decide(null) }));
   actions.push(el("button", { type: "button", class: "small ghost", text: match.multi ? "加入" : row.rights.length ? "改選" : "手動指定", onclick: togglePicker }));
-  if (row.status !== "none") actions.push(el("button", { type: "button", class: "small ghost", text: "沒有配對", onclick: () => decide([]) }));
+  if (row.status !== "none") actions.push(el("button", { type: "button", class: "small ghost", text: "沒有配對", dataset: { guide: "match-none", rid: row.left }, onclick: () => decide([]) }));
 
   const how = (row.status === "ambiguous" ? `依「${row.how}」找到 ${row.total || candidates.length} 筆可能的${match.right_label}，請選一筆`
     : row.status === "unmatched" ? `每一種方式都找不到對應的${match.right_label}`
@@ -1272,7 +1342,11 @@ function matchCard(match, row) {
         el("div", { class: "candidate-head" }, rowTitle(target, match.right_title, cand.rid, row.left),
           cand.score !== null && cand.score !== undefined ? el("span", { class: "muted", text: `相似度 ${Number(cand.score).toFixed(2)}` }) : null,
           el("span", { class: "spacer" }),
-          btn({ text: "選這筆", icon: "check", variant: "default", onclick: () => decide(match.multi ? [...row.rights, cand.rid] : [cand.rid]) })),
+          btn({
+            text: "選這筆", icon: "check", variant: "default",
+            dataset: { guide: "pick", left: row.left, rid: cand.rid },
+            onclick: () => decide(match.multi ? [...row.rights, cand.rid] : [cand.rid]),
+          })),
         valuesList(target.values, rightColumns, left.values));
     }));
   } else if (row.rights.length === 1 && !match.multi) {
@@ -1289,13 +1363,13 @@ function matchCard(match, row) {
   } else {
     side = el("p", { class: "muted", text: row.status === "none" ? "已確認沒有對應的資料" : "沒有找到對應的資料" });
   }
-  return el("article", { class: "match-card" },
+  return el("article", { class: "match-card", dataset: { rid: row.left } },
     el("header", {},
       el("span", { class: `badge ${tone}`, text: label }),
       el("span", { class: "how", text: how }),
       el("span", { class: "spacer" }), actions),
     el("div", { class: "match-body" },
-      el("div", { class: "side" }, el("h4", { text: match.left_label }), el("div", { class: "side-title" }, rowTitle(left, match.left_title, row.left, row.rights[0] || null)),
+      el("div", { class: "side" }, el("h4", { text: match.left_label }), el("div", { class: "side-title" }, rowTitle(left, match.left_title, row.left, row.rights[0] || null, "match-sheet")),
         valuesList(left.values, leftColumns)),
       el("div", { class: "side" }, el("h4", { text: match.right_label + (match.multi && row.rights.length ? `・${row.rights.length} 筆` : "") }), side,
         state.pickerFor === row.left ? picker(match, row, rightColumns, decide) : null)),
@@ -1345,10 +1419,19 @@ function picker(match, row, columns, decide) {
 /* ---------- 對照表 ---------- */
 function targetControl(allowed) {
   if (!allowed) return { node: el("input", { placeholder: "輸入對應值" }), read: (n) => ({ target: n.value.trim(), new_value: false }) };
-  const select = el("select", {}, el("option", { value: "", text: "選擇對應值" }), allowed.map((v) => el("option", { value: v, text: v })),
+  const select = el("select", { dataset: { guide: "map-select" } }, el("option", { value: "", text: "選擇對應值" }), allowed.map((v) => el("option", { value: v, text: v })),
     el("option", { value: "__new", text: "＋ 新增對應值…" }));
-  const input = el("input", { placeholder: "新的對應值", hidden: true });
-  select.addEventListener("change", () => { input.hidden = select.value !== "__new"; if (!input.hidden) input.focus(); });
+  const input = el("input", { placeholder: "新的對應值", hidden: true, dataset: { guide: "map-new" } });
+  select.addEventListener("change", () => {
+    input.hidden = select.value !== "__new";
+    if (!input.hidden) input.focus();
+    guide()?.schedule();
+  });
+  input.addEventListener("input", () => guide()?.notify("map-new-typing"));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); guide()?.notify("map-new-commit", { value: input.value }); input.blur(); }
+  });
+  input.addEventListener("blur", () => guide()?.notify("map-new-commit", { value: input.value }));
   const node = el("div", { class: "target" }, select, input);
   return { node, read: () => (select.value === "__new" ? { target: input.value.trim(), new_value: true } : { target: select.value, new_value: false }) };
 }
@@ -1358,7 +1441,7 @@ function renderMapping() {
   const pending = r.unmapped;
   const sections = [];
   sections.push(el("section", { class: "block" },
-    el("h3", { text: "待補對照" }),
+    el("h3", {}, "待補對照", guide()?.hintButton("lab-mapping", "各種寫法統一成同一個代碼")),
     el("p", { class: "muted small-text", text: "這些寫法不在對照表裡。補上的對照存在這份 recipe，之後處理其他檔案也會套用。清單裡沒有合適的值，可以選「新增對應值」。" }),
     pending.length ? el("div", { class: "list" }, pending.map((entry) => {
       const control = targetControl(entry.allowed);
@@ -1429,6 +1512,7 @@ function cellPlace(origin) {
 /* 看原始資料：預設在按鈕旁邊跳出小卡（表頭、那一列與前後兩列），不離開正在檢查的地方，才能對照。
    要看整張工作表再按小卡上的「完整工作表」。沒有按鈕可以對齊時（例如鍵盤操作）直接打開完整工作表。 */
 function openSource(place, anchor = null, compare = null) {
+  guide()?.notify("source-open", { place });
   if (!anchor) { showSheet(place); return; }
   peek(place, anchor, compare);
 }
@@ -1438,6 +1522,7 @@ function openSource(place, anchor = null, compare = null) {
    左邊固定放這一列自己的表，右邊放配對到的表。 */
 function showSheet(place) {
   closePeek();
+  guide()?.notify("source-open", { place });
   const spot = { sheet: place.sheet, row: place.row, col: place.col ?? null, start: null };
   const partner = place.partner && place.partner.sheet !== place.sheet ? place.partner : null;
   const lefts = new Set(state.result.matches.map((m) => m.left));
@@ -1502,6 +1587,7 @@ function closePeek() {
   const card = document.getElementById("peek");
   if (card) card.remove();
   peekAnchor = null;
+  guide()?.schedule();
 }
 
 async function peek(place, anchor, compare) {
@@ -1915,16 +2001,17 @@ function watchConnection() {
   window.addEventListener("pageshow", (event) => { if (event.persisted) { openLive(); heartbeat(); } });
 }
 
-/* 鍵盤：J／K 上一筆下一筆（打字時不作用），Esc 先關小卡再關細節 */
+/* 鍵盤：J／K 上一筆下一筆（打字時不作用），Esc 先關小卡再關導覽浮動卡與外框 */
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && document.getElementById("peek")) { closePeek(); e.preventDefault(); return; }
+  if (e.key === "Escape" && guide()?.handleEscape(e)) return;
   if (e.metaKey || e.ctrlKey || e.altKey || $("dialog").open || isTyping() || e.target.closest?.("input, textarea, select")) return;
   if (!state.result || state.tab !== "rows") return;
   const key = e.key.toLowerCase();
   if (key !== "j" && key !== "k") return;
   const { list, prev, next } = neighbors(state.selected);
   const target = key === "j" ? (state.selected ? next : list[0]) : prev;
-  if (target) { e.preventDefault(); selectRow(target.rid); }
+  if (target) { e.preventDefault(); guide()?.notify("jk-used"); selectRow(target.rid); }
 });
 
 function bind() {
@@ -1935,7 +2022,11 @@ function bind() {
   zone.addEventListener("dragleave", () => zone.classList.remove("over"));
   zone.addEventListener("drop", (e) => { e.preventDefault(); zone.classList.remove("over"); if (e.dataTransfer.files[0]) uploadWorkbook(e.dataTransfer.files[0]); });
   $("runButton").addEventListener("click", runNow);
-  $("drawerClose").addEventListener("click", () => { closePeek(); state.selected = null; renderTabs(); });
+  $("exportButton").addEventListener("click", () => guide()?.notify("demo-export"));
+  $("drawerClose").addEventListener("click", () => {
+    if (guide()?.isLabActive()) { guide().leaveDemo({ dismiss: false }); return; }
+    closePeek(); state.selected = null; renderTabs();
+  });
   $("dialog").addEventListener("click", (e) => { if (e.target === $("dialog")) closeDialog(); });
 }
 
@@ -1947,11 +2038,27 @@ function decorateButtons() {
   }
 }
 
+async function checkVersionMismatch(status) {
+  if (isPopout || !status?.version) return;
+  try {
+    const build = await fetch("/web/build.json", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null));
+    if (build?.version && build.version !== status.version) {
+      $("versionBanner").hidden = false;
+    }
+  } catch (_e) { /* 略過 */ }
+}
+
 async function main() {
   decorateButtons();
   watchConnection();
   bind();
   setupPanes();
+  guide()?.init({
+    state, prefs, isPopout, popped,
+    api, post, toast, copyText,
+    renderTabs, renderRows, renderDrawer, renderRecipes,
+    selectRow, goTo, setResult, setWorkbook, loadRecipes, editRecipe, popInAll,
+  });
   if (isPopout) {
     const status = await api("/api/status").catch(() => ({}));
     $("version").textContent = status.version ? `v${status.version}` : "";
@@ -1961,8 +2068,10 @@ async function main() {
   try {
     const status = await api("/api/status");
     $("version").textContent = status.version ? `v${status.version}` : "";
+    checkVersionMismatch(status);
     await loadRecipes();
     await loadSamples();
+    guide()?.initWhatsNew(status);
   } catch (error) {
     toast(error.message, true);
   }

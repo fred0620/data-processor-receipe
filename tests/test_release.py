@@ -74,3 +74,16 @@ def test_offline_package_must_match_uv_lock(tmp_path):
     (tmp_path / "evil-1.0-py3-none-any.whl").write_bytes(b"x")     # uv.lock 裡沒有的套件
     with pytest.raises(SystemExit, match="不在 uv.lock"):
         build_release.verify_wheels(tmp_path)
+
+
+def test_build_json_matches_version():
+    import json
+    build = json.loads((ROOT / "app" / "dataprocessor" / "web" / "build.json").read_text(encoding="utf-8"))
+    assert build["version"] == build_release.read_version()
+
+
+def test_whatsnew_valid():
+    import check_whatsnew
+    assert check_whatsnew.check() == []
+
+

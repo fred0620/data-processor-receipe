@@ -1,0 +1,41 @@
+{
+  "versions": [
+    {
+      "version": "0.2.0",
+      "date": "2026-11-24",
+      "items": [
+        {
+          "id": "0.2.0-help",
+          "title": "說明選單",
+          "body": "導覽、進階功能、練習與手冊都在右上角。",
+          "spotlight": "help-menu"
+        },
+        {
+          "id": "0.2.0-labs",
+          "title": "寫 recipe 的實地練習",
+          "body": "改一小段 recipe，試算確認做對。",
+          "spotlight": "help-labs"
+        },
+        {
+          "id": "0.2.0-source",
+          "title": "兩張表並排找配對",
+          "body": "原始表標出沒用到的列，答案一眼就看到。",
+          "spotlight": "card-source",
+          "needsResult": true
+        },
+        {
+          "id": "0.2.0-why",
+          "title": "警示怎麼判斷的",
+          "body": "展開規則與這一列用到的每個值。",
+          "spotlight": "card-trace",
+          "needsResult": true
+        }
+      ]
+    },
+    {
+      "version": "0.1.0",
+      "date": "2026-04-01",
+      "items": []
+    }
+  ]
+}

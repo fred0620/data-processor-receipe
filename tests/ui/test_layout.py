@@ -144,3 +144,26 @@ def test_controls_follow_stageshow(ui):
         && !b.getAttribute('aria-label')).length""")
     assert unnamed == 0, "只有圖示的按鈕都要有名字"
     ui.shot("controls")
+
+
+def test_narrow_viewport_below_900_stays_usable(ui):
+    """375×740 與 800×600 時，歡迎卡完整在畫面內、指令條行動句不擠壓、「下一步」「關閉導覽」可點。"""
+    for w, h in ((375, 740), (800, 600)):
+        ui.page.set_viewport_size({"width": 1280, "height": 800})
+        page = ui.open()
+        page.set_viewport_size({"width": w, "height": h})
+        page.wait_for_timeout(200)
+        # 歡迎卡完整在畫面內
+        welcome = page.locator(".welcome").bounding_box()
+        assert welcome and welcome["x"] >= 0 and welcome["x"] + welcome["width"] <= w + 1
+        # 開始導覽
+        page.click('[data-guide="welcome-review"]')
+        page.wait_for_selector("#missionStrip:not([hidden])")
+        page.wait_for_timeout(250)
+        action_box = page.locator("#missionStrip .mission-action").bounding_box()
+        # 行動句寬度至少夠放 8 個中文字（約 112px）
+        assert action_box and action_box["width"] >= 112, f"{w}x{h} 行動句太窄：{action_box}"
+        assert page.locator('#missionStrip button:has-text("下一步")').is_visible()
+        assert page.locator('#guideBar button:has-text("關閉導覽")').is_visible()
+        page.click('#guideBar button:has-text("關閉導覽")')
+        page.wait_for_timeout(200)

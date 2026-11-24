@@ -32,11 +32,15 @@ def base_url(tmp_path, monkeypatch):
     server.paths.RECIPES.mkdir()
     shutil.copy(EXAMPLES / "recipes" / "invoice-declaration.yaml", server.paths.RECIPES)
     monkeypatch.setattr(server.paths, "SAMPLES", EXAMPLES / "samples")
+    for store in (server._runs, server._workbooks, server._clients, server._live, server._jobs):
+        store.clear()
     httpd = make_server("127.0.0.1", 0, server.app, threaded=True)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{httpd.server_port}"
     httpd.shutdown()
+    for store in (server._runs, server._workbooks, server._clients, server._live, server._jobs):
+        store.clear()
 
 
 @pytest.fixture(scope="session")

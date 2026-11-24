@@ -79,14 +79,25 @@ def test_drawer_edit_revert_multiline_and_trace(ui):
     assert "已人工修改" in page.locator("#drawer .issue.dismissed").first.inner_text()
     # 多行文字：Shift+Enter 換行、Enter 儲存，文字框跟著長高
     name = ui.field("品名").locator("textarea")
+    init_height = name.evaluate("e => e.offsetHeight")
     name.click()
     name.press("End")
     name.press("Shift+Enter")
     name.type("第二行")
+    page.wait_for_function(
+        "(h) => document.querySelector('#drawer [data-guide=\"field-品名\"]')?.offsetHeight > h",
+        arg=init_height,
+        timeout=3000,
+    )
     height = name.evaluate("e => e.offsetHeight")
     name.press("Enter")
     ui.settle()
     assert ui.state("state.result.output.rows.find(r => r.rid === 'invoice:9').values['品名']") == "線材組\n第二行"
+    page.wait_for_function(
+        "(h) => document.querySelector('#drawer [data-guide=\"field-品名\"]')?.offsetHeight >= h",
+        arg=height,
+        timeout=3000,
+    )
     assert ui.field("品名").locator("textarea").evaluate("e => e.offsetHeight") >= height
     ui.field("品名").locator(".hint button:has-text('還原')").click()
     ui.settle()

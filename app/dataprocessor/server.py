@@ -25,6 +25,7 @@ from flask import Flask, Response, jsonify, redirect, request, send_file, send_f
 from werkzeug.exceptions import HTTPException
 
 from . import __version__, engine, logs, paths
+from .engine import labs as lab_engine
 from .engine.explain import explain
 from .engine.trace import trace
 from .engine.export import export as export_excel
@@ -171,9 +172,38 @@ def ping():
     return jsonify({"app": "dataprocessor", "home": HOME_ID})
 
 
+def _is_returning() -> bool:
+    """workspace 裡已有人工紀錄或使用者自己的 recipe，代表不是全新使用者。"""
+    if paths.REVIEWS.is_dir() and any(paths.REVIEWS.rglob("*.json")):
+        return True
+    if paths.MAPPINGS.is_dir() and any(paths.MAPPINGS.rglob("*.json")):
+        return True
+    if paths.RECIPES.is_dir():
+        for path in paths.RECIPES.glob("*.yaml"):
+            if not _is_builtin_recipe(path):
+                return True
+    return False
+
+
+def _recipe_text(path: Path) -> str:
+    return path.read_bytes().decode("utf-8-sig", errors="replace").replace("\r\n", "\n").strip()
+
+
+def _is_builtin_recipe(path: Path) -> bool:
+    """名稱和內容都和內建的一樣才算內建（第一次啟動複製的範例、關卡 B 存的練習）；改過或同名不同內容算使用者的。"""
+    builtin = {
+        "invoice-declaration": paths.EXAMPLES / "workspace" / "recipes" / "invoice-declaration.yaml",
+        "practice-invoice": paths.DEMO / "recipe-fixed.yaml",
+    }.get(path.stem)
+    try:
+        return builtin is not None and _recipe_text(path) == _recipe_text(builtin)
+    except OSError:
+        return False
+
+
 @app.get("/api/status")
 def status():
-    return jsonify({"version": __version__})
+    return jsonify({"version": __version__, "returning": _is_returning()})
 
 
 @app.post("/api/heartbeat")
@@ -214,10 +244,11 @@ def live():
                     _clients[client] = time.time()
         finally:  # 連線斷了（頁面關閉、瀏覽器結束）
             with _clients_lock:
-                _live[client] -= 1
-                if _live[client] <= 0:
-                    del _live[client]
-                    _clients.pop(client, None)
+                if client in _live:
+                    _live[client] -= 1
+                    if _live[client] <= 0:
+                        del _live[client]
+                        _clients.pop(client, None)
 
     return Response(stream(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -248,7 +279,33 @@ def _safe_name(raw: str | None, limit: int = 120) -> str:
     return name[:limit] or "file"
 
 
+def _demo_manifest() -> dict:
+    return json.loads((paths.DEMO / "demo.json").read_text(encoding="utf-8"))
+
+
+def _demo_recipe_path(name: str) -> Path:
+    recipes = _demo_manifest().get("recipes", {})
+    filename = recipes.get(name)
+    if not filename:
+        raise ValueError("不認得的範例項目")
+    return paths.DEMO / filename
+
+
+PRACTICE_ID = "practice:invoice"
+
+
+def _practice_recipe_path() -> Path:
+    return paths.SCRATCH / "demo" / "recipes" / "invoice.yaml"
+
+
 def _recipe_path(recipe_id: str) -> Path:
+    if (recipe_id or "").startswith("demo:"):
+        return _demo_recipe_path(recipe_id.split(":", 1)[1])
+    if recipe_id == PRACTICE_ID:
+        path = _practice_recipe_path()
+        if not path.is_file():
+            raise Missing("找不到這份 recipe")
+        return path
     if not RECIPE_ID.fullmatch(recipe_id or ""):
         raise Missing("找不到這份 recipe")
     path = paths.RECIPES / f"{recipe_id}.yaml"
@@ -269,12 +326,23 @@ def _recipe_problem(exc: engine.RecipeError):
 def list_recipes():
     items = []
     for path in sorted(paths.RECIPES.glob("*.yaml")):
-        item = {"id": path.stem, "name": path.stem, "description": "", "problems": []}
+        item = {"id": path.stem, "name": path.stem, "description": "", "problems": [], "practice": False}
         try:
             recipe = engine.load_recipe(path.read_text(encoding="utf-8"))
             item.update(id=recipe.id, name=recipe.name, description=recipe.description)
             if recipe.id != path.stem:
                 item["problems"] = [f"檔名 {path.stem}.yaml 和 id「{recipe.id}」不同，請把兩者改成一樣"]
+        except engine.RecipeError as exc:
+            item["problems"] = exc.problems
+        except (OSError, UnicodeDecodeError):
+            item["problems"] = ["無法讀取這個檔案，請確認是 UTF-8 文字檔"]
+        items.append(item)
+    practice = _practice_recipe_path()
+    if practice.is_file():
+        item = {"id": PRACTICE_ID, "name": "發票對報關單（練習）", "description": "", "problems": [], "practice": True}
+        try:
+            recipe = engine.load_recipe(practice.read_text(encoding="utf-8"))
+            item.update(name=recipe.name, description=recipe.description)
         except engine.RecipeError as exc:
             item["problems"] = exc.problems
         except (OSError, UnicodeDecodeError):
@@ -315,14 +383,25 @@ def get_recipe(recipe_id):
     return jsonify({"id": recipe_id, "text": _recipe_path(recipe_id).read_text(encoding="utf-8")})
 
 
+def _save_practice_recipe(text: str, recipe) -> dict:
+    target = _practice_recipe_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text.replace("\r\n", "\n"), encoding="utf-8")
+    log.info("儲存練習 recipe id=%s", PRACTICE_ID)
+    return {"id": PRACTICE_ID, "name": recipe.name, "practice": True}
+
+
 @app.post("/api/recipes")
 def save_recipe():
     """存 recipe：可以上傳 .yaml 檔，或貼上文字。存檔前先完整檢查，不合格的不存。"""
     upload = request.files.get("file")
+    is_practice = False
     if upload is not None:
         data = upload.read(RECIPE_LIMIT + 1)
     else:
-        data = str(_json_body().get("text", "")).encode("utf-8")
+        body = _json_body()
+        data = str(body.get("text", "")).encode("utf-8")
+        is_practice = bool(body.get("practice"))
     if len(data) > RECIPE_LIMIT:
         raise ValueError("recipe 太大（上限 512 KB）")
     try:
@@ -334,10 +413,12 @@ def save_recipe():
     except engine.RecipeError as exc:
         log.info("recipe 檢查不通過 problems=%d", len(exc.problems))
         return _recipe_problem(exc)
+    if is_practice:
+        return jsonify(_save_practice_recipe(text, recipe))
     paths.RECIPES.mkdir(parents=True, exist_ok=True)
     (paths.RECIPES / f"{recipe.id}.yaml").write_text(text.replace("\r\n", "\n"), encoding="utf-8")
     log.info("儲存 recipe id=%s", log_text(recipe.id))
-    return jsonify({"id": recipe.id, "name": recipe.name})
+    return jsonify({"id": recipe.id, "name": recipe.name, "practice": False})
 
 
 @app.delete("/api/recipes/<recipe_id>")
@@ -347,17 +428,30 @@ def delete_recipe(recipe_id):
     return jsonify({"ok": True})
 
 
-def _register_workbook(source: Path, name: str) -> dict:
+def _trim(store: dict, limit: int) -> list[dict]:
+    """超過上限時先丟最舊的範例項目，沒有範例項目才丟使用者的；回傳被丟掉的項目。"""
+    dropped = []
+    while len(store) > limit:
+        key = next((k for k, v in store.items() if v.get("demo")), None) or next(iter(store))
+        dropped.append(store.pop(key))
+    return dropped
+
+
+def _register_workbook(source: Path, name: str, *, demo: bool = False) -> dict:
+    if demo:   # 內建範例檔不會變，重複使用同一份，練習按幾次都不會擠掉使用者的檔案
+        for workbook_id, item in _workbooks.items():
+            if item.get("demo") and item["path"] == source:
+                return {"id": workbook_id, "name": item["name"], "demo": True,
+                        "sheets": [{"name": s.name, "rows": len(s.rows)} for s in item["sheets"]]}
     sheets = read_workbook(source)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
     workbook_id = uuid.uuid4().hex[:12]
-    _workbooks[workbook_id] = {"path": source, "name": name, "hash": digest, "sheets": sheets}
-    while len(_workbooks) > MAX_WORKBOOKS:   # 只留最近幾份，舊的上傳檔一併刪除
-        old = _workbooks.pop(next(iter(_workbooks)))
+    _workbooks[workbook_id] = {"path": source, "name": name, "hash": digest, "sheets": sheets, "demo": demo}
+    for old in _trim(_workbooks, MAX_WORKBOOKS):   # 只留最近幾份，舊的上傳檔一併刪除
         if old["path"].parent == paths.UPLOADS:
             old["path"].unlink(missing_ok=True)
     log.info("載入 workbook id=%s sheets=%d", workbook_id, len(sheets))
-    return {"id": workbook_id, "name": name,
+    return {"id": workbook_id, "name": name, "demo": demo,
             "sheets": [{"name": s.name, "rows": len(s.rows)} for s in sheets]}
 
 
@@ -399,17 +493,163 @@ def use_sample(name):
     return jsonify(_register_workbook(path, path.name))
 
 
+@app.post("/api/demo/start")
+def demo_start():
+    """載入內建範例資料與範例 recipe，所有決定與對照改放暫存。"""
+    body = _json_body()
+    journey_id = str(body.get("journey", ""))
+    spec = _demo_manifest().get("journeys", {}).get(journey_id)
+    if not spec:
+        raise ValueError("不認得的導覽關卡")
+    wb_path = paths.DEMO / spec["workbook"]
+    if not wb_path.is_file():
+        raise Missing("找不到內建範例檔案")
+    wb = _register_workbook(wb_path, wb_path.name, demo=True)
+    custom_recipe = body.get("recipe")
+    if custom_recipe == PRACTICE_ID:
+        recipe = _read_recipe(PRACTICE_ID)
+        recipe_info = {"id": PRACTICE_ID, "name": recipe.name, "demo": True}
+    else:
+        recipe_key = spec["recipe"]
+        recipe = _read_recipe(f"demo:{recipe_key}")
+        recipe_info = {"id": f"demo:{recipe_key}", "name": recipe.name, "demo": True}
+    log.info("開始範例導覽 journey=%s", log_text(journey_id))
+    return jsonify({"workbook": wb, "recipe": recipe_info})
+
+
+@app.get("/api/demo/recipe/<name>")
+def demo_recipe(name):
+    """回傳白名單內的練習 recipe 文字。"""
+    path = _demo_recipe_path(name)
+    if not path.is_file():
+        raise Missing("找不到範例 recipe")
+    return jsonify({"name": name, "text": path.read_text(encoding="utf-8")})
+
+
+@app.post("/api/demo/clear")
+def demo_clear():
+    """清掉範例與練習的暫存結果、決定、對照與練習 recipe。"""
+    for run_id in [k for k, v in list(_runs.items()) if v.get("demo")]:
+        _runs.pop(run_id, None)
+    for wb_id in [k for k, v in list(_workbooks.items()) if v.get("demo")]:
+        _workbooks.pop(wb_id, None)
+    shutil.rmtree(paths.SCRATCH / "demo", ignore_errors=True)
+    log.info("清除範例資料")
+    return jsonify({"ok": True})
+
+
+def _get_lab(lab_id: str) -> dict:
+    lab = lab_engine.load_labs(paths.DEMO).get(lab_id)
+    if not lab:
+        raise ValueError("不認得的練習項目")
+    return lab
+
+
+def _run_lab_recipe(lab: dict, recipe_text: str) -> dict:
+    wb_path = paths.DEMO / lab["workbook"]
+    wb = _register_workbook(wb_path, wb_path.name, demo=True)
+    recipe = engine.load_recipe(recipe_text)
+    # 每次試算一個暫存資料夾，留到 /api/demo/clear 或下次啟動清掉；之後在這個結果上做的決定也寫在這裡
+    temp_root = paths.SCRATCH / "demo" / "labs" / uuid.uuid4().hex[:8]
+    review = ReviewStore(temp_root / "reviews", recipe.id, _workbooks[wb["id"]]["hash"])
+    mappings = MappingStore(temp_root / "mappings", recipe.id)
+    keep: dict = {}
+    with _run_lock:
+        result = engine.run(recipe, _workbooks[wb["id"]]["sheets"], review, mappings, paths.SCRATCH, keep)
+    run_id = uuid.uuid4().hex[:12]
+    result["run_id"] = run_id
+    result["workbook"] = {"id": wb["id"], "name": wb["name"]}
+    result["decisions"] = 0
+    result["can_restore"] = False
+    result["demo"] = True
+    _runs[run_id] = {"recipe": f"lab:{lab['id']}", "recipe_text": recipe_text, "store_root": temp_root,
+                     "workbook": wb["id"], "demo": True,
+                     "result": result, "review": review, "job": keep.get("job")}
+    _trim(_runs, MAX_RUNS)
+    return result
+
+
+@app.get("/api/labs")
+def get_labs():
+    return jsonify({"labs": lab_engine.list_labs(paths.DEMO)})
+
+
+@app.post("/api/labs/<lab_id>/start")
+def start_lab(lab_id):
+    lab = _get_lab(lab_id)
+    template = (paths.DEMO / lab["recipe"]).read_text(encoding="utf-8")
+    merged, _, _ = lab_engine.insert_snippet(template, lab["slot"]["marker"], lab.get("start", ""))
+    result = _run_lab_recipe(lab, merged)
+    wb_sheets = _workbooks[result["workbook"]["id"]]["sheets"]
+    log.info("開始練習 lab=%s", log_text(lab_id))
+    return jsonify({
+        "id": lab["id"],
+        "title": lab["title"],
+        "goal": lab.get("goal", ""),
+        "recipe_text": template,
+        "slot": lab["slot"],
+        "start": lab.get("start", ""),
+        "sample_preview": lab_engine.sample_preview(wb_sheets),
+        "result": result,
+    })
+
+
+@app.post("/api/labs/<lab_id>/try")
+def try_lab(lab_id):
+    lab = _get_lab(lab_id)
+    snippet = str(_json_body().get("snippet", ""))
+    if len(snippet.encode("utf-8")) > 32 * 1024:
+        raise ValueError("片段內容太長")
+    template = (paths.DEMO / lab["recipe"]).read_text(encoding="utf-8")
+    merged, slot_line, snippet_lines = lab_engine.insert_snippet(template, lab["slot"]["marker"], snippet)
+    try:
+        result = _run_lab_recipe(lab, merged)
+    except engine.RecipeError as exc:
+        problems = lab_engine.remap_problem_lines(exc.problems, slot_line, snippet_lines)
+        log.info("練習試算 lab=%s pass=False problems=%d", log_text(lab_id), len(problems))
+        return jsonify({"ok": False, "problems": problems, "checks": [], "result": None})
+    checks = lab_engine.evaluate_checks(result, lab.get("checks", []))
+    passed = all(c["pass"] for c in checks)
+    log.info("練習試算 lab=%s pass=%s checks=%d", log_text(lab_id), passed, len(checks))
+    return jsonify({"ok": passed, "problems": [], "checks": checks, "result": result})
+
+
+@app.get("/api/labs/<lab_id>/answer")
+def lab_answer(lab_id):
+    lab = _get_lab(lab_id)
+    return jsonify({"answer": lab.get("answer", "")})
+
+
+def _record_recipe(record: dict):
+    """執行紀錄用的 recipe：練習存的是合併後的文字，其他存 recipe id。"""
+    if "recipe_text" in record:
+        return engine.load_recipe(record["recipe_text"])
+    return _read_recipe(record["recipe"])
+
+
+def _store_roots(record: dict) -> tuple[Path, Path]:
+    """人工決定與對照放哪裡：練習放自己的暫存、範例放 demo 暫存、其他放正式資料夾。"""
+    if record.get("store_root"):
+        root = record["store_root"]
+        return root / "reviews", root / "mappings"
+    if record.get("demo"):
+        root = paths.SCRATCH / "demo"
+        return root / "reviews", root / "mappings"
+    return paths.REVIEWS, paths.MAPPINGS
+
+
 def _execute(run_id: str) -> dict:
     record = _runs[run_id]
     workbook = _workbooks.get(record["workbook"])
     if workbook is None:
         raise Missing("檔案已關閉，請重新上傳")
     try:
-        recipe = _read_recipe(record["recipe"])
+        recipe = _record_recipe(record)
     except engine.RecipeError as exc:
         raise _RecipeInvalid(exc) from None
-    review = ReviewStore(paths.REVIEWS, recipe.id, workbook["hash"])
-    mappings = MappingStore(paths.MAPPINGS, recipe.id)
+    is_demo = bool(record.get("demo"))
+    review_root, mapping_root = _store_roots(record)
+    review, mappings = ReviewStore(review_root, recipe.id, workbook["hash"]), MappingStore(mapping_root, recipe.id)
     _jobs[run_id] = {"finished": False}
     started = time.time()
     try:
@@ -422,6 +662,8 @@ def _execute(run_id: str) -> dict:
     result["workbook"] = {"id": record["workbook"], "name": workbook["name"]}
     result["decisions"] = review.count()               # 人工決定的數量，重設前讓使用者知道會清掉多少
     result["can_restore"] = review.backup.exists()     # 剛重設過，可以復原
+    if is_demo:
+        result["demo"] = True
     record.update(result=result, review=review, job=keep.get("job"))   # job 是執行紀錄，覆核某一列時用
     log.info("執行 run=%s recipe=%s status=%s rows=%d issues=%d seconds=%.1f", run_id, log_text(recipe.id),
              result["status"], len(result["output"]["rows"]), result["counts"]["review"], time.time() - started)
@@ -444,12 +686,13 @@ def start_run():
     recipe_id = str(body.get("recipe", ""))
     workbook_id = str(body.get("workbook", ""))
     _recipe_path(recipe_id)
-    if workbook_id not in _workbooks:
+    workbook = _workbooks.get(workbook_id)
+    if workbook is None:
         raise Missing("檔案已關閉，請重新上傳")
+    is_demo = recipe_id.startswith(("demo:", "practice:")) or bool(workbook.get("demo"))
     run_id = uuid.uuid4().hex[:12]
-    _runs[run_id] = {"recipe": recipe_id, "workbook": workbook_id}
-    while len(_runs) > MAX_RUNS:
-        _runs.pop(next(iter(_runs)))
+    _runs[run_id] = {"recipe": recipe_id, "workbook": workbook_id, "demo": is_demo}
+    _trim(_runs, MAX_RUNS)
     return jsonify(_execute(run_id))
 
 
@@ -621,7 +864,7 @@ def add_mapping(run_id):
     """補上對照：之後同一份 recipe 處理其他檔案時也會用到。target 為 null 時移除。"""
     record = _run_record(run_id)
     body = _json_body()
-    recipe = _read_recipe(record["recipe"])
+    recipe = _record_recipe(record)
     name = str(body.get("mapping", ""))
     spec = recipe.mappings.get(name)
     if spec is None:
@@ -630,7 +873,7 @@ def add_mapping(run_id):
     target = body.get("target")
     if not raw or len(raw) > 200:
         raise ValueError("原始值不正確")
-    store = MappingStore(paths.MAPPINGS, recipe.id)
+    store = MappingStore(_store_roots(record)[1], recipe.id)
     new_value = False
     if target is not None:
         target = str(target).strip()
@@ -652,7 +895,8 @@ def export_run(run_id):
     result = record["result"]
     stamp = time.strftime("%Y%m%d-%H%M%S")
     stem = Path(_workbooks.get(record["workbook"], {}).get("name", "data")).stem
-    name = _safe_name(f"{stem}_{result['recipe']['id']}_{stamp}.xlsx")
+    prefix = "示範_" if record.get("demo") else ""
+    name = _safe_name(f"{prefix}{stem}_{result['recipe']['id']}_{stamp}.xlsx")
     path = export_excel(result, paths.OUTPUT / name)
     log.info("匯出 run=%s rows=%d", run_id, len(result["output"]["rows"]))
     return send_file(path, as_attachment=True, download_name=name)

@@ -31,6 +31,7 @@ REVIEWS = WORKSPACE / "reviews"      # 人工修改、指定配對、確認過�
 SAMPLES = WORKSPACE / "samples"      # 範例資料
 
 EXAMPLES = APP / "examples"
+DEMO = Path(__file__).resolve().parent / "demo"
 MANUAL = APP / "user-guide.html"
 RECIPE_SPEC = APP / "recipe-spec.md"     # 給 AI 讀的 recipe 規格
 GUIDES = {"user-guide.html", "update-guide.html"}  # 工具裡可以開啟的說明文件

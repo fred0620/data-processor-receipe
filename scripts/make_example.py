@@ -5,12 +5,17 @@
 from __future__ import annotations
 
 import datetime as dt
+import shutil
 from pathlib import Path
 
 from openpyxl import Workbook
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGET = ROOT / "app" / "examples" / "workspace" / "samples" / "範例_發票與報關單.xlsx"
+DEMO_DIR = ROOT / "app" / "dataprocessor" / "demo"
+DEMO_TARGET = DEMO_DIR / "範例_發票與報關單.xlsx"
+EXAMPLE_RECIPE = ROOT / "app" / "examples" / "workspace" / "recipes" / "invoice-declaration.yaml"
+DEMO_RECIPE = DEMO_DIR / "invoice-declaration.yaml"
 
 INVOICES = [
     # 發票號碼, 發票日期, 品名, 數量, 金額, 幣別, 運送方式, 狀態
@@ -57,7 +62,11 @@ def main() -> None:
         sheet.append(list(row))
     TARGET.parent.mkdir(parents=True, exist_ok=True)
     book.save(TARGET)
-    print("完成", TARGET.relative_to(ROOT))
+    DEMO_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(TARGET, DEMO_TARGET)
+    if EXAMPLE_RECIPE.is_file():
+        shutil.copyfile(EXAMPLE_RECIPE, DEMO_RECIPE)
+    print("完成", TARGET.relative_to(ROOT), DEMO_TARGET.relative_to(ROOT))
 
 
 if __name__ == "__main__":

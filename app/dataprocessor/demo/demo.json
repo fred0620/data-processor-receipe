@@ -1,0 +1,13 @@
+{
+  "journeys": {
+    "review": {
+      "workbook": "範例_發票與報關單.xlsx",
+      "recipe": "invoice-declaration"
+    }
+  },
+  "recipes": {
+    "invoice-declaration": "invoice-declaration.yaml",
+    "recipe-draft": "recipe-draft.yaml",
+    "recipe-fixed": "recipe-fixed.yaml"
+  }
+}
