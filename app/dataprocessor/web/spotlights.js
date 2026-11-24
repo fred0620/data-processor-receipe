@@ -177,7 +177,7 @@
       id: "help-menu",
       title: "說明選單",
       target: "#helpBtn",
-      pointer: "↑ 說明選單",
+      pointer: "說明選單",
       action: "導覽、進階功能、練習與手冊都在右上角",
       tip: "點「說明 ▾」隨時打開",
     },
@@ -185,7 +185,7 @@
       id: "help-labs",
       title: "寫 recipe 的實地練習",
       target: "#helpBtn",
-      pointer: "↑ 打開實地練習",
+      pointer: "打開實地練習",
       action: "改一小段 recipe，試算確認做對",
       tip: "從「說明 ▾」的「寫 recipe」選任一項開始",
     },
@@ -221,12 +221,93 @@
     return null;
   }
 
+  /* 還沒處理的配對（卡片上的「需處理」）：依卡片順序，附上左邊那一列的標題 */
+  function pendingMatches(result) {
+    const out = [];
+    for (const match of result?.matches || []) {
+      for (const row of match.rows) {
+        if (!row.open) continue;
+        const left = match.left_rows[row.left];
+        const title = (match.left_title || []).map((k) => left?.values?.[k]).filter(Boolean).join("・");
+        out.push({ match, row, title });
+      }
+    }
+    return out;
+  }
+
+  /* 結果裡還需要檢查的列數（進度條上的「需檢查」） */
+  function reviewRowsLeft(result) {
+    return (result?.output?.rows || []).filter((r) => r.status === "review").length;
+  }
+
+  /* 第 8 步：現在要處理哪一張配對卡片，行動句、提醒、目標與浮標都跟著它走 */
+  function matchStepInfo(ctx) {
+    const first = pendingMatches(ctx.state.result)[0];
+    if (!first) return { action: "配對都處理完了", tip: "", target: null, pointer: "" };
+    const { match, row, title } = first;
+    const left = CSS.escape(row.left);
+    if (row.status === "review") {
+      return {
+        action: row.candidates?.length > 1 || row.rights.length !== 1
+          ? `${title} 的配對要確認，按「確認正確」`
+          : `${title} 只剩一筆候選，按「確認正確」`,
+        tip: "人工指定後剩下的候選也要你確認",
+        target: `[data-guide="match-confirm"][data-rid="${left}"]`,
+        pointer: "確認正確",
+      };
+    }
+    if (row.status === "ambiguous" && row.candidates?.length) {
+      return {
+        action: `${title} 有多筆候選，選一筆`,
+        tip: "比對候選之間不一樣的欄位再選",
+        target: `[data-guide="pick"][data-left="${left}"][data-rid="${CSS.escape(row.candidates[0].rid)}"]`,
+        pointer: "選這筆",
+      };
+    }
+    return {
+      action: `${title} 沒有${match.right_label}，按「沒有配對」`,
+      tip: `先確認對面沒有合適的列，原因例如「這張${match.left_label}沒有出口報關」`,
+      target: `[data-guide="match-none"][data-rid="${left}"]`,
+      pointer: "沒有配對",
+    };
+  }
+
+  /* 第 9 步：選到的列有一定要處理的警示時，浮標改指那個警示的動作 */
+  function reviewBlocker(ctx) {
+    const result = ctx.state.result;
+    const row = result?.output?.rows?.find((r) => r.rid === ctx.state.selected);
+    if (!row || ctx.state.tab !== "rows" || !ctx.bridge.openIssues) return null;
+    const issue = ctx.bridge.openIssues(row).find((i) => ctx.bridge.mustHandle(i));
+    if (!issue) return null;
+    const col = issue.out_columns?.[0] || issue.column || "";
+    const type = result.output.columns.find((c) => c.name === col)?.type;
+    const field = col ? `#drawer [data-guide="field-${CSS.escape(col)}"][data-rid="${CSS.escape(row.rid)}"]` : null;
+    if (issue.code === "parse" || issue.code === "extract") {
+      const want = type === "number" || type === "integer" ? "數字" : type === "date" ? "日期" : "能讀的值";
+      return { target: field, pointer: "改這一格", tip: `${col}讀不懂，改成${want}後按 Enter` };
+    }
+    if (issue.code === "required") return { target: field, pointer: "補這一格", tip: `${col}是必填，補上後按 Enter` };
+    if (issue.code === "unmapped") {
+      return { target: '#drawer [data-guide="map-select"]', pointer: "選對應值", tip: "這個寫法不在對照表，選一個對應值，或新增對應值再補上對照" };
+    }
+    if (String(issue.code).startsWith("match_")) {
+      return { target: '#drawer [data-guide="issue-goto-match"]', pointer: "前往配對", tip: "配對還沒處理好，到配對分頁選候選或按「沒有配對」" };
+    }
+    return { target: '#drawer [data-guide="foot-todo"]', pointer: "先處理警示", tip: issue.message };
+  }
+
+  /* 還沒看完就按了下載：提醒還剩幾列 */
+  function unfinishedRowsWarning(ctx) {
+    const n = reviewRowsLeft(ctx.state.result);
+    return n > 0 ? `還有 ${n} 列沒看，看完再下載` : null;
+  }
+
   function rowValidateIssues(result, row) {
     if (!result || !row) return [];
     return (row.issues || []).map((i) => result.issues[i]).filter((i) => i && i.stage === "validate");
   }
 
-  /* 關卡 A：核對一份資料（8 步） */
+  /* 關卡 A：核對一份資料（10 步） */
   const JOURNEY_REVIEW = {
     id: "review",
     title: "核對一份資料",
@@ -238,7 +319,7 @@
         action: "按「執行」處理範例資料",
         tip: "10 張發票要對 7 張報關單",
         target: "#runButton",
-        pointer: "← 按這裡執行",
+        pointer: "按這裡執行",
         done: (ctx) => ctx.state.result?.demo === true,
       },
       {
@@ -273,7 +354,7 @@
               const row = findRowByTitle(ctx.state.result, "INV-1003");
               return row ? `[data-guide="issue-trace"][data-rid="${CSS.escape(row.rid)}"]` : '[data-guide="issue-trace"]';
             },
-            pointer: "← 看怎麼判斷的",
+            pointer: "看怎麼判斷的",
             done: (ctx) => Boolean(ctx.flags.sawTrace) || (() => {
               const row = findRowByTitle(ctx.state.result, "INV-1003");
               const issues = rowValidateIssues(ctx.state.result, row);
@@ -285,7 +366,7 @@
             action: "按「確認無誤，下一筆」",
             tip: "範例當作已向業務確認，差額沒問題",
             target: '[data-guide="confirm-next"]',
-            pointer: "↓ 確認無誤，下一筆",
+            pointer: "確認無誤，下一筆",
             done: (ctx) => {
               const row = findRowByTitle(ctx.state.result, "INV-1003");
               if (!row) return false;
@@ -363,7 +444,7 @@
             action: "對應值選「新增對應值」",
             tip: "陸運不是空運、海運或快遞",
             target: '#drawer [data-guide="map-select"]',
-            pointer: "← 選新增對應值",
+            pointer: "選新增對應值",
             done: (ctx) => {
               const sel = document.querySelector('#drawer [data-guide="map-select"]');
               return Boolean(sel && sel.value === "__new");
@@ -374,7 +455,7 @@
             action: "輸入 LAND",
             tip: "代碼用英文大寫，和其他代碼一樣",
             target: '#drawer [data-guide="map-new"]',
-            pointer: "← 輸入 LAND",
+            pointer: "輸入 LAND",
             done: (ctx) => {
               const val = (ctx.flags.mapNewCommitted || "").trim();
               if (!val) return false;
@@ -387,7 +468,7 @@
             action: "按「補上對照」",
             tip: "實際使用時，之後的檔案也會套用",
             target: '#drawer [data-guide="map-save"]',
-            pointer: "← 補上對照",
+            pointer: "補上對照",
             done: (ctx) => {
               const m = ctx.state.result?.mappings?.find((x) => x.name === "ship_mode");
               if (!m) return false;
@@ -474,7 +555,7 @@
               const found = findMatchRowByTitle(ctx.state.result, "inv_decl", "INV-1008");
               return found ? `[data-guide="match-sheet"][data-rid="${CSS.escape(found.row.left)}"]` : '[data-guide="match-sheet"]';
             },
-            pointer: "← 看原始表",
+            pointer: "看原始表",
             done: (ctx) => Boolean(ctx.flags.sawSource),
           },
           {
@@ -485,7 +566,7 @@
               const found = findMatchRowByTitle(ctx.state.result, "inv_decl", "INV-1008");
               return found ? `[data-guide="match-none"][data-rid="${CSS.escape(found.row.left)}"]` : '[data-guide="match-none"]';
             },
-            pointer: "↑ 沒有配對",
+            pointer: "沒有配對",
             done: (ctx) => {
               const found = findMatchRowByTitle(ctx.state.result, "inv_decl", "INV-1008");
               return Boolean(found && found.row.status === "none");
@@ -503,11 +584,69 @@
         id: "review-8",
         journey: "review",
         needs: "demoResult",
+        title: "把配對做完",
+        tabNeeded: "match",
+        setup: (ctx) => {
+          const first = pendingMatches(ctx.state.result)[0];
+          if (!first) return;
+          // 只列「需處理」：處理完的卡片會離開清單，剩下的就是還要做的
+          if (ctx.state.tab !== "match" || ctx.state.matchName !== first.match.name || ctx.state.matchFilter !== "todo") {
+            ctx.bridge.goTo({ tab: "match", matchName: first.match.name, matchFilter: "todo", matchFocus: null, matchSearch: "" });
+          }
+        },
+        action: (ctx) => matchStepInfo(ctx).action,
+        tip: (ctx) => matchStepInfo(ctx).tip,
+        target: (ctx) => matchStepInfo(ctx).target,
+        pointer: (ctx) => matchStepInfo(ctx).pointer,
+        wrong: (ctx) => (ctx.flags.exportedEarly ? unfinishedRowsWarning(ctx) : null),
+        done: (ctx) => Boolean(ctx.state.result?.demo) && pendingMatches(ctx.state.result).length === 0,
+      },
+      {
+        id: "review-9",
+        journey: "review",
+        needs: "demoResult",
+        title: "把剩下的列看完",
+        tabNeeded: "rows",
+        setup: (ctx) => {
+          const rows = ctx.state.result?.output?.rows || [];
+          const cur = rows.find((r) => r.rid === ctx.state.selected);
+          if (ctx.state.tab === "rows" && cur?.status === "review") return;
+          const first = rows.find((r) => r.status === "review");
+          if (!first) return;
+          ctx.state.tab = "rows";
+          ctx.state.filter = "review";
+          ctx.bridge.selectRow(first.rid);
+        },
+        action: (ctx) => `按「確認無誤，下一筆」看完剩下 ${reviewRowsLeft(ctx.state.result)} 列`,
+        tip: (ctx) => {
+          const blocker = reviewBlocker(ctx);
+          return blocker ? blocker.tip : `還有 ${reviewRowsLeft(ctx.state.result)} 列，進度條滿了就能下載`;
+        },
+        target: (ctx) => {
+          const blocker = reviewBlocker(ctx);
+          if (blocker) return blocker.target;
+          if (document.querySelector('#drawer [data-guide="confirm-next"]')) return '[data-guide="confirm-next"]';
+          const first = (ctx.state.result?.output?.rows || []).find((r) => r.status === "review");
+          return first ? `table.grid tbody tr[data-rid="${CSS.escape(first.rid)}"]` : null;
+        },
+        pointer: (ctx) => {
+          const blocker = reviewBlocker(ctx);
+          if (blocker) return blocker.pointer;
+          return document.querySelector('#drawer [data-guide="confirm-next"]') ? "確認無誤，下一筆" : "點這一列";
+        },
+        wrong: (ctx) => (ctx.flags.exportedEarly ? unfinishedRowsWarning(ctx) : null),
+        done: (ctx) => Boolean(ctx.state.result?.demo) && reviewRowsLeft(ctx.state.result) === 0,
+      },
+      {
+        id: "review-10",
+        journey: "review",
+        needs: "demoResult",
         title: "下載",
         action: "按右上角「下載 Excel」",
         tip: "檔名會加「示範_」，和正式檔案分開",
         target: "#exportButton",
-        pointer: "↑ 下載 Excel",
+        pointer: "下載 Excel",
+        wrong: unfinishedRowsWarning,
         done: (ctx) => Boolean(ctx.flags.demoExported),
       },
     ],
@@ -525,7 +664,7 @@
         action: "按 Recipe 旁的「新增」",
         tip: "recipe 寫好資料怎麼讀、怎麼配對",
         target: "#newRecipe",
-        pointer: "← 新增 recipe",
+        pointer: "新增 recipe",
         done: (ctx) => Boolean(ctx.flags.openedRecipeDialog),
       },
       {
@@ -536,7 +675,7 @@
         action: "按「複製規格給 AI」",
         tip: "實際使用時連同欄位與規則貼給 AI",
         target: '[data-guide="spec-copy"]',
-        pointer: "← 複製規格給 AI",
+        pointer: "複製規格給 AI",
         done: (ctx) => Boolean(ctx.flags.copiedSpec),
       },
       {
@@ -559,7 +698,7 @@
           },
         },
         target: (ctx) => (ctx.flags.pastedDraft ? '[data-guide="recipe-next"]' : '[data-guide="dialog-assist"]'),
-        pointer: (ctx) => (ctx.flags.pastedDraft ? "↑ 下一步" : "↑ 貼上練習回覆"),
+        pointer: (ctx) => (ctx.flags.pastedDraft ? "下一步" : "貼上練習回覆"),
         done: (ctx) => Boolean(ctx.flags.sawProblems),
       },
       {
@@ -573,7 +712,7 @@
             action: "按「複製問題給 AI」",
             tip: "問題附行號，AI 看得懂",
             target: '[data-guide="problems-copy"]',
-            pointer: "← 複製問題",
+            pointer: "複製問題",
             done: (ctx) => Boolean(ctx.flags.copiedProblems),
           },
           {
@@ -593,7 +732,7 @@
               },
             },
             target: (ctx) => (ctx.flags.pastedFixed ? '[data-guide="recipe-next"]' : '[data-guide="dialog-assist"]'),
-            pointer: (ctx) => (ctx.flags.pastedFixed ? "↑ 下一步" : "↑ 貼上修正版"),
+            pointer: (ctx) => (ctx.flags.pastedFixed ? "下一步" : "貼上修正版"),
             done: (ctx) => Boolean(ctx.flags.sawExplain),
           },
         ],
@@ -607,7 +746,7 @@
         action: "讀完說明，按「確認並儲存」",
         tip: "每一列會經過哪些判斷都寫在這裡",
         target: '[data-guide="recipe-save"]',
-        pointer: "↑ 確認並儲存",
+        pointer: "確認並儲存",
         done: (ctx) => Boolean(ctx.flags.practiceSaved && ctx.state.recipes.some((r) => r.practice === true)),
       },
     ],
@@ -668,7 +807,7 @@
           action: "照目標寫，或複製提問給 AI",
           tip: "寫完按 Ctrl+Enter 或點一下外面",
           target: '[data-guide="lab-copy-ai"]',
-          pointer: "↓ 複製提問",
+          pointer: "複製提問",
           done: () => Boolean(labState.snippetCommitted && labState.snippet.trim().length > 0),
         },
         {
@@ -678,7 +817,7 @@
           action: "按「試算」，全部打勾才算完成",
           tip: "不對會列出哪一列、抓到什麼、應該是什麼",
           target: '[data-guide="lab-try"]',
-          pointer: "↓ 試算",
+          pointer: "試算",
           noSkip: true,
           done: () => Boolean(labState.passed),
         },
@@ -820,6 +959,15 @@
       window.addEventListener("scroll", onScroll, { passive: true, capture: true });
       window.addEventListener("resize", onScroll, { passive: true });
 
+      // 指令條的高度寫進 --guide-dock-h，.work 的 scroll-padding-top 才不會讓捲到的目標被它蓋住
+      const dockEl = document.querySelector(".guide-dock");
+      const workEl = document.querySelector(".work");
+      const syncDockHeight = () => {
+        if (dockEl && workEl) workEl.style.setProperty("--guide-dock-h", `${Math.round(dockEl.getBoundingClientRect().height)}px`);
+      };
+      syncDockHeight();
+      if (window.ResizeObserver && dockEl) new ResizeObserver(() => { syncDockHeight(); onScroll(); }).observe(dockEl);
+
       if (window.ResizeObserver) {
         this.resizeObs = new ResizeObserver(onScroll);
         const work = document.querySelector(".work");
@@ -886,7 +1034,7 @@
               text: "用自己的資料開始",
               onclick: () => this.openSpotlight("own-data", {
                 target: "#dropZone",
-                pointer: "← 放進 Excel 檔",
+                pointer: "放進 Excel 檔",
                 action: "把你的 Excel 拖到左邊，選好 recipe 再按「執行」",
               }),
             })),
@@ -1082,6 +1230,8 @@
               if (!def.steps[i].done(ctx)) { pick = def.steps[i]; break; }
             }
             this.stepId = pick.id;
+            jp.step = pick.id;
+            this.savePrefs();
           } catch (_err) {
             if (this.journeyGen !== gen) return;
             // 準備失敗：回到第 1 步並更新 prefs
@@ -1358,7 +1508,8 @@
 
       // 步驟目標所在分頁被 pop out 時
       const poppedAway = step.tabNeeded && this.bridge.popped.has(step.tabNeeded);
-      const actionText = activeSub ? activeSub.action : step.action;
+      const resolveText = (v) => (typeof v === "function" ? v(ctx) : v);
+      const actionText = resolveText(activeSub ? activeSub.action : step.action);
       const wrongMsg = step.wrong ? step.wrong(ctx) : null;
       const assist = (activeSub && activeSub.assist) || step.assist || null;
 
@@ -1370,7 +1521,7 @@
       } else if (step.tipLegend) {
         tipNode = node("div", { class: "mission-tip" }, statusLegendRow());
       } else {
-        const tipText = activeSub ? activeSub.tip : step.tip;
+        const tipText = resolveText(activeSub ? activeSub.tip : step.tip);
         tipNode = tipText ? node("div", { class: "mission-tip", text: tipText }) : null;
       }
 
@@ -1407,21 +1558,20 @@
 
     renderCompleteStrip(strip, def) {
       if (def.id === "review") {
-        const remaining = (this.bridge.state.result?.output?.rows || []).filter((r) => r.status === "review").length;
         const primaryBtn = this.savedWork
           ? node("button", { type: "button", class: "primary small", text: "回到我的工作", onclick: () => this.leaveDemo({ dismiss: false }) })
           : node("button", {
             type: "button", class: "primary small", text: "用自己的資料開始",
             onclick: async () => {
               await this.leaveDemo({ dismiss: false });
-              this.openSpotlight("own-data", { target: "#dropZone", pointer: "← 放進 Excel 檔", action: "把你的 Excel 拖到左邊，選好 recipe 再按「執行」" });
+              this.openSpotlight("own-data", { target: "#dropZone", pointer: "放進 Excel 檔", action: "把你的 Excel 拖到左邊，選好 recipe 再按「執行」" });
             },
           });
         put(strip,
           node("span", { class: "mission-badge done", text: "✓" }),
           node("div", { class: "mission-main" },
             node("div", { class: "mission-action", text: "核對流程走完了" }),
-            node("div", { class: "mission-tip", text: remaining ? `範例還有 ${remaining} 列，可以照同樣方式做完` : "範例資料都已處理完" })),
+            node("div", { class: "mission-tip", text: "每一列都處理過才下載，正式資料也一樣" })),
           node("div", { class: "mission-actions" },
             primaryBtn,
             node("button", { type: "button", class: "ghost small", text: "練習放入 recipe", onclick: () => this.startJourney("recipe") }),
@@ -1550,7 +1700,7 @@
           const step = this.currentStep();
           if (step) {
             if (step.tabNeeded && this.bridge.popped.has(step.tabNeeded)) {
-              spec = { target: '[data-guide="popin-all"]', pointer: "↑ 全部 Pop in" };
+              spec = { target: '[data-guide="popin-all"]', pointer: "全部 Pop in" };
             } else {
               spec = this.currentSub(step) || step;
             }
@@ -1618,7 +1768,7 @@
       }
 
       // 3) 浮標模式（只畫 #guidePointer，不畫 .guide-target）
-      const label = typeof spec.pointer === "function" ? spec.pointer(ctx) : (spec.pointer || "← 這裡");
+      const label = typeof spec.pointer === "function" ? spec.pointer(ctx) : (spec.pointer || "這裡");
       this.positionPointer(targetEl, label, inDialog);
     },
 
@@ -1630,35 +1780,43 @@
       try { el.scrollIntoView({ block: "nearest" }); } catch (_e) { /* 略過 */ }
     },
 
+    /* 浮標只寫動作，不寫方向：方向由三角形（data-dir，一定指向目標）表示。
+       目標在畫面外或被指令條（.guide-dock）蓋住時，浮標貼在捲動區的上緣或下緣，寫「往上捲」「往下捲」。 */
     positionPointer(el, label, inDialog = false) {
       const ptr = this.ensurePointer(inDialog);
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) { ptr.hidden = true; return; }
+      const text = String(label ?? "").replace(/^[\s←→↑↓]+|[\s←→↑↓]+$/g, "");
 
       const vw = window.innerWidth;
       const vh = window.innerHeight;
-      const offTop = rect.bottom < 48;
+      const dock = inDialog ? null : document.querySelector(".guide-dock");
+      const dockRect = dock && dock.getClientRects().length ? dock.getBoundingClientRect() : null;
+      const underDock = Boolean(dockRect) && rect.right > dockRect.left && rect.left < dockRect.right
+        && rect.bottom <= dockRect.bottom + 4;
+      const offTop = rect.bottom < 48 || underDock;
       const offBottom = rect.top > vh - 8;
 
-      ptr.textContent = offTop ? `↑ ${label.replace(/^[←→↑↓]\s*/, "")}`
-        : offBottom ? `↓ ${label.replace(/^[←→↑↓]\s*/, "")}`
-          : label;
+      ptr.textContent = offTop ? "往上捲" : offBottom ? "往下捲" : text;
       ptr.hidden = false;
       const pw = ptr.offsetWidth || 80;
       const ph = ptr.offsetHeight || 26;
+      ptr.style.removeProperty("--tip");
 
       if (offTop || offBottom) {
+        const left = Math.max(12, Math.min(rect.left, vw - pw - 12));
         ptr.dataset.side = "offscreen";
-        ptr.style.left = `${Math.max(12, Math.min(rect.left, vw - pw - 12))}px`;
-        ptr.style.top = `${offTop ? 56 : vh - ph - 16}px`;
+        ptr.dataset.dir = offTop ? "up" : "down";
+        ptr.style.left = `${left}px`;
+        ptr.style.top = `${offTop ? Math.max(56, dockRect && underDock ? dockRect.bottom + 8 : 56) : vh - ph - 16}px`;
+        ptr.style.setProperty("--tip", `${Math.max(10, Math.min(rect.left + rect.width / 2 - left, pw - 10))}px`);
         return;
       }
 
       const obstacles = inDialog ? [] : [
         document.querySelector("header.bar"),
-        document.getElementById("guideBar"),
-        document.getElementById("missionStrip"),
-      ].filter((n) => n && !n.hidden).map((n) => n.getBoundingClientRect());
+        dock,
+      ].filter((n) => n && n.getClientRects().length).map((n) => n.getBoundingClientRect());
 
       // 加入同操作列（或父容器）裡除了目標以外的可點元素作為障礙物
       const actionBar = el.closest(".lab-actions, .dialog-actions, .drawer-foot, .actions, .toolbar, .inline-fix, .mission-actions") || el.parentElement;
@@ -1687,16 +1845,13 @@
         top: Math.max(8, Math.min(c.top, vh - ph - 8)),
       });
 
-      const overlapArea = (c) => {
-        const cr = { left: c.left, top: c.top, right: c.left + pw, bottom: c.top + ph };
-        let area = 0;
-        for (const o of obstacles) {
-          const ox = Math.max(0, Math.min(cr.right, o.right) - Math.max(cr.left, o.left));
-          const oy = Math.max(0, Math.min(cr.bottom, o.bottom) - Math.max(cr.top, o.top));
-          area += ox * oy;
-        }
-        return area;
+      const overlapWith = (c, o) => {
+        const ox = Math.max(0, Math.min(c.left + pw, o.right) - Math.max(c.left, o.left));
+        const oy = Math.max(0, Math.min(c.top + ph, o.bottom) - Math.max(c.top, o.top));
+        return ox * oy;
       };
+      // 蓋到目標本身最糟（三角形就沒有指向目標了），權重放大
+      const overlapArea = (c) => obstacles.reduce((sum, o) => sum + overlapWith(c, o), 0) + overlapWith(c, rect) * 50;
 
       const inBounds = (c) => c.left >= 6 && c.left + pw <= vw - 6 && c.top >= 6 && c.top + ph <= vh - 6;
 
@@ -1706,7 +1861,22 @@
       } else {
         chosen = clamp(chosen);
       }
+
+      // 三角形指向目標：依浮標最後實際放的位置決定（擠進視窗邊緣被位移時也要對）
+      const right = chosen.left + pw;
+      const bottom = chosen.top + ph;
+      let dir = { right: "left", left: "right", bottom: "up", top: "down" }[chosen.side];
+      if (right <= rect.left + 1) dir = "right";
+      else if (chosen.left >= rect.right - 1) dir = "left";
+      else if (bottom <= rect.top + 1) dir = "down";
+      else if (chosen.top >= rect.bottom - 1) dir = "up";
+      const tip = dir === "left" || dir === "right"
+        ? Math.max(8, Math.min(rect.top + rect.height / 2 - chosen.top, ph - 8))
+        : Math.max(10, Math.min(rect.left + rect.width / 2 - chosen.left, pw - 10));
+
       ptr.dataset.side = chosen.side;
+      ptr.dataset.dir = dir;
+      ptr.style.setProperty("--tip", `${tip}px`);
       ptr.style.left = `${chosen.left}px`;
       ptr.style.top = `${chosen.top}px`;
     },
@@ -1902,7 +2072,7 @@
       }
       if (c.tryTarget) {
         requestAnimationFrame(() => {
-          this.openSpotlight(c.id, { target: c.tryTarget, pointer: `← ${c.title.slice(0, 10)}` });
+          this.openSpotlight(c.id, { target: c.tryTarget, pointer: `${c.title.slice(0, 10)}` });
         });
       }
     },
@@ -2308,7 +2478,9 @@
       } else if (event === "source-open") {
         this.persistFlag("sawSource", true);
       } else if (event === "demo-export") {
-        if (this.bridge.state.result?.demo) this.persistFlag("demoExported", true);
+        // 還有列沒看就下載：不算完成，只提醒（步驟停在原地）
+        const result = this.bridge.state.result;
+        if (result?.demo) this.persistFlag(reviewRowsLeft(result) === 0 ? "demoExported" : "exportedEarly", true);
       } else if (event === "recipe-dialog") {
         this.flags.recipeDialogOpen = true;
         this.persistFlag("openedRecipeDialog", true);

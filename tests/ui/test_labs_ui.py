@@ -6,6 +6,8 @@ from pathlib import Path
 
 from playwright.sync_api import expect
 
+from guide_checks import assert_pointer_text_and_direction
+
 ROOT = Path(__file__).resolve().parents[2]
 LABS = {item["id"]: item for item in json.loads((ROOT / "app" / "dataprocessor" / "demo" / "labs.json").read_text(encoding="utf-8"))["labs"]}
 
@@ -26,6 +28,7 @@ def _assert_lab_pointer_not_covering_buttons(page):
       return null;
     }""")
     assert overlap is None, f"練習浮標蓋住按鈕：{overlap}"
+    assert_pointer_text_and_direction(page)
 
 
 def test_lab_match_full_flow_pointer_clear_and_work_restore(ui):

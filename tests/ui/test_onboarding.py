@@ -1,11 +1,13 @@
-"""新手導覽（關卡 A、關卡 B）、說明選單、說明卡、續玩、浮動卡縮放、工作保存與 popout 隔離的介面測試。"""
+"""新手導覽（關卡 A 共 10 步、關卡 B）、說明選單、說明卡、續玩、浮動卡縮放、工作保存與 popout 隔離的介面測試。"""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from playwright.sync_api import expect
 
 import dataprocessor.server as server
+from guide_checks import assert_pointer_text_and_direction
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES = ROOT / "app" / "examples" / "workspace"
@@ -46,6 +48,7 @@ def _assert_pointer_clear(page):
       if (!ptr.closest('#dialog')) {
         for (const [name, node] of [
           ['header.bar', document.querySelector('header.bar')],
+          ['.guide-dock', document.querySelector('.guide-dock')],
           ['#guideBar', document.getElementById('guideBar')],
           ['#missionStrip', document.getElementById('missionStrip')],
         ]) {
@@ -73,6 +76,7 @@ def _assert_step_has_guidance(page):
     total = _assert_single_emphasis(page)
     assert total == 1, f"這一步（{action}）沒有可見的浮標、外框或虛線"
     _assert_pointer_clear(page)
+    assert_pointer_text_and_direction(page)
 
 
 def test_welcome_help_menu_and_cards(ui):
@@ -208,8 +212,41 @@ def test_journey_a_full_walkthrough_and_guards(ui):
     _assert_step_has_guidance(page)
     page.locator('.match-card:has-text("INV-1008") [data-guide="match-none"]').click()
 
-    # 第 8 步：下載 Excel
+    # 第 8 步：把配對做完（子步驟依還沒處理的配對動態產生）
+    expect(page.locator("#missionStrip .mission-badge")).to_have_text(re.compile(r"^8"))
+    handled = []
+    for _ in range(6):
+        action = page.locator("#missionStrip .mission-action").inner_text()
+        if "確認正確" not in action and "沒有配對" not in action:
+            break
+        _assert_step_has_guidance(page)
+        invoice = re.search(r"INV-\d+", action).group(0)
+        handled.append(invoice)
+        if "確認正確" in action:
+            page.locator(f'.match-card:has-text("{invoice}") [data-guide="match-confirm"]').click()
+        else:
+            page.locator(f'.match-card:has-text("{invoice}") [data-guide="match-none"]').click()
+        # 處理完的卡片離開「需處理」清單，行動句換成下一張
+        expect(page.locator("#missionStrip .mission-action")).not_to_have_text(action)
+    assert sorted(handled) == ["INV-1005", "INV-1006", "INV-1010"], handled
+    ui.shot("onboarding-10-journey-a-step8-done")
+    assert ui.state("state.result.matches.every(m => m.counts.todo === 0)")
+
+    # 第 9 步：把剩下的列看完，提醒行的 n 即時更新
+    expect(page.locator("#missionStrip .mission-action")).to_contain_text("確認無誤，下一筆")
+    expect(page.locator("#missionStrip .mission-badge")).to_have_text(re.compile(r"^9"))
+    remaining = ui.state("state.result.output.rows.filter(r => r.status === 'review').length")
+    assert remaining >= 1
+    for n in range(remaining, 0, -1):
+        expect(page.locator("#missionStrip .mission-tip")).to_contain_text(f"還有 {n} 列")
+        _assert_step_has_guidance(page)
+        page.click('[data-guide="confirm-next"]')
+
+    # 第 10 步：下載 Excel（看完才推進）
     expect(page.locator("#missionStrip .mission-action")).to_contain_text("下載 Excel")
+    assert ui.state("state.result.output.rows.filter(r => r.status === 'review').length") == 0
+    expect(page.locator("#missionStrip .mission-badge")).to_have_text(re.compile(r"^10"))
+    expect(page.locator("#guideBar")).to_contain_text("10/10")
     _assert_step_has_guidance(page)
     with page.expect_download() as dl_info:
         page.click("#exportButton")
@@ -217,7 +254,10 @@ def test_journey_a_full_walkthrough_and_guards(ui):
 
     # 完成狀態
     expect(page.locator("#missionStrip .mission-action")).to_contain_text("核對流程走完了")
+    expect(page.locator("#missionStrip .mission-tip")).to_contain_text("每一列都處理過才下載")
     ui.shot("onboarding-07-journey-a-done")
+    assert ui.state("state.result.matches.every(m => m.counts.todo === 0)")
+    assert ui.state("state.result.output.rows.filter(r => r.status === 'review').length") == 0
 
 
 def test_journey_b_dialog_top_layer_and_user_recipe_safe(ui):

@@ -109,7 +109,11 @@ body.resizing { cursor: col-resize; user-select: none; }
   background: var(--surface); border-right: 1px solid var(--line); overflow-y: auto;
   padding: 16px 12px; display: flex; flex-direction: column; gap: 20px;
 }
-.work { min-width: 0; overflow: auto; padding: 28px 32px 48px; background: var(--well); }
+.work {
+  min-width: 0; overflow: auto; padding: 28px 32px 48px; background: var(--well);
+  /* 導覽的指令條（.guide-dock）蓋在捲動內容上方，捲到目標時要留出它的高度 */
+  scroll-padding-top: calc(var(--guide-dock-h, 0px) + 12px);
+}
 
 /* 獨立視窗：只留結果，表格用滿整個視窗 */
 body.popout .setup, body.popout .pipeline, body.popout .stage-detail, body.popout .manual-link { display: none; }
@@ -723,10 +727,16 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .welcome-secondary { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .welcome-note { margin: 14px 0 0; font-size: 12.5px; color: var(--text); }
 
-/* 導覽進度列（#guideBar）與指令條（#missionStrip） */
+/* 導覽進度列（#guideBar）與指令條（#missionStrip）一起放在 .guide-dock：在 .work 裡 sticky 貼在最上面，
+   捲到表格或配對卡片時仍看得到現在要做什麼。負的 margin 抵銷 .work 的內距，讓 dock 貼齊邊緣。 */
+.guide-dock {
+  position: sticky; top: -28px; z-index: 30; margin: -28px -32px 16px;
+  background: var(--well); border-bottom: 1px solid var(--line);
+}
+.guide-dock:not(:has(> :not([hidden]))) { display: none; }
 .guide-bar {
   display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 12px;
-  margin: -28px -32px 0; background: var(--surface); border-bottom: 1px solid var(--line);
+  background: var(--surface); border-bottom: 1px solid var(--line);
   white-space: nowrap; overflow: hidden;
 }
 .guide-dots { display: inline-flex; align-items: center; flex: none; }
@@ -756,7 +766,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 
 .mission-strip {
   display: flex; align-items: center; gap: 12px; min-height: 52px;
-  margin: 8px -20px 14px; padding: 10px 12px;
+  margin: 8px 12px; padding: 10px 12px;
   background: var(--accent-soft);
   border: 1px solid var(--accent-line); border-radius: var(--radius-md);
 }
@@ -808,11 +818,11 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .guide-pointer::after {
   content: ""; position: absolute; width: 0; height: 0; border: 6px solid transparent;
 }
-.guide-pointer[data-side="right"]::after { right: 100%; top: 50%; transform: translateY(-50%); border-right-color: var(--accent); }
-.guide-pointer[data-side="left"]::after { left: 100%; top: 50%; transform: translateY(-50%); border-left-color: var(--accent); }
-.guide-pointer[data-side="bottom"]::after { bottom: 100%; left: 50%; transform: translateX(-50%); border-bottom-color: var(--accent); }
-.guide-pointer[data-side="top"]::after { top: 100%; left: 50%; transform: translateX(-50%); border-top-color: var(--accent); }
-.guide-pointer[data-side="offscreen"]::after { display: none; }
+/* 三角形永遠指向目標（data-dir 是三角形指的方向）；--tip 讓它對準目標的中心 */
+.guide-pointer[data-dir="left"]::after { right: 100%; top: var(--tip, 50%); transform: translateY(-50%); border-right-color: var(--accent); }
+.guide-pointer[data-dir="right"]::after { left: 100%; top: var(--tip, 50%); transform: translateY(-50%); border-left-color: var(--accent); }
+.guide-pointer[data-dir="up"]::after { bottom: 100%; left: var(--tip, 50%); transform: translateX(-50%); border-bottom-color: var(--accent); }
+.guide-pointer[data-dir="down"]::after { top: 100%; left: var(--tip, 50%); transform: translateX(-50%); border-top-color: var(--accent); }
 
 .guide-target { outline: 2px solid var(--accent) !important; outline-offset: 3px; }
 .guide-outline {
@@ -909,8 +919,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* 900px 以下（非主要支援，仍保持可用）：指令條兩行、歡迎卡滿寬 */
 @media (max-width: 899px) {
   .work { padding: 16px 16px 32px; }
-  .guide-bar { margin: -16px -16px 0; }
-  .mission-strip { flex-wrap: wrap; margin: 8px 0 12px; gap: 8px 10px; }
+  .guide-dock { top: -16px; margin: -16px -16px 12px; }
+  .mission-strip { flex-wrap: wrap; margin: 8px 12px; gap: 8px 10px; }
   .mission-main { flex: 1 1 calc(100% - 36px); }
   .mission-actions { width: 100%; justify-content: flex-end; }
   .welcome { max-width: 100%; width: 100%; margin-top: 12px; }
@@ -919,6 +929,7 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 /* popout 隱藏所有導覽與教學元件 */
 body.popout #helpBtn,
 body.popout #versionBanner,
+body.popout .guide-dock,
 body.popout #guideBar,
 body.popout #missionStrip,
 body.popout #guidePointer,

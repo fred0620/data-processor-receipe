@@ -983,7 +983,7 @@ function issueValues(issue) {
 function issueLine(issue, extra = null, inline = false) {
   const actions = [];
   if (issue.ref && issue.rid && state.result.matches.some((m) => m.name === issue.ref)) {
-    actions.push(el("button", { type: "button", class: "link", text: "前往配對", onclick: () => focusMatch(issue.ref, issue.rid.split("|")[0]) }));
+    actions.push(el("button", { type: "button", class: "link", text: "前往配對", dataset: { guide: "issue-goto-match" }, onclick: () => focusMatch(issue.ref, issue.rid.split("|")[0]) }));
   }
   const entry = issue.code === "unmapped" && !issue.resolved ? unmappedEntry(issue) : null;
   if (issue.code === "unmapped" && !issue.resolved && !(inline && entry)) {
@@ -1133,7 +1133,7 @@ function renderDrawerFoot(row) {
   if (blocking.length) {
     /* 還有要處理的：不給一鍵確認，告訴他還剩什麼；要跳過也可以 */
     action = el("div", { class: "foot-action" },
-      el("span", { class: "foot-todo" }, el("span", { class: "dot review" }), `還有 ${blocking.length} 個要處理`),
+      el("span", { class: "foot-todo", dataset: { guide: "foot-todo" } }, el("span", { class: "dot review" }), `還有 ${blocking.length} 個要處理`),
       el("button", { type: "button", class: "small", disabled: !next, title: "先跳過這一列，之後再回來", onclick: () => next && selectRow(next.rid) },
         el("span", { text: "跳過" }), kbd("J")));
   } else if (judge.length) {
@@ -1323,7 +1323,7 @@ function matchCard(match, row) {
   const togglePicker = () => { state.pickerFor = state.pickerFor === row.left ? null : row.left; renderMatch(); };
 
   const actions = [];
-  if (reviewIssue && row.status === "review") actions.push(btn({ text: "確認正確", icon: "check", variant: "primary", onclick: () => act("dismiss", { keys: [reviewIssue.key], on: true }) }));
+  if (reviewIssue && row.status === "review") actions.push(btn({ text: "確認正確", icon: "check", variant: "primary", dataset: { guide: "match-confirm", rid: row.left }, onclick: () => act("dismiss", { keys: [reviewIssue.key], on: true }) }));
   if (reviewIssue && row.status === "confirmed") actions.push(el("button", { type: "button", class: "small ghost", text: "取消確認", onclick: () => act("dismiss", { keys: [reviewIssue.key], on: false }) }));
   if (row.status === "manual" || row.status === "none") actions.push(el("button", { type: "button", class: "small ghost", text: "交回自動", onclick: () => decide(null) }));
   actions.push(el("button", { type: "button", class: "small ghost", text: match.multi ? "加入" : row.rights.length ? "改選" : "手動指定", onclick: togglePicker }));
@@ -2057,7 +2057,7 @@ async function main() {
     state, prefs, isPopout, popped,
     api, post, toast, copyText,
     renderTabs, renderRows, renderDrawer, renderRecipes,
-    selectRow, goTo, setResult, setWorkbook, loadRecipes, editRecipe, popInAll,
+    selectRow, goTo, setResult, setWorkbook, loadRecipes, editRecipe, popInAll, openIssues, mustHandle,
   });
   if (isPopout) {
     const status = await api("/api/status").catch(() => ({}));
