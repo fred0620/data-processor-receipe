@@ -68,3 +68,38 @@ def test_lab_syntax_error_remaps_line_number(client):
     assert res.json["ok"] is False
     assert res.json["problems"]
     assert any("片段第" in p for p in res.json["problems"]), res.json["problems"]
+
+
+def test_lab_tries_keep_user_workbook_and_run(client):
+    """練習按很多次試算，使用者自己上傳的檔案與執行結果都不能被擠掉或刪掉。"""
+    import io
+    data = (DEMO / "範例_發票與報關單.xlsx").read_bytes()
+    upload = client.post("/api/workbooks", data={"file": (io.BytesIO(data), "mine.xlsx")},
+                         headers=LOCAL, content_type="multipart/form-data")
+    assert upload.status_code == 200
+    wb_id = upload.json["id"]
+    saved = server._workbooks[wb_id]["path"]
+    (server.paths.RECIPES / "my-recipe.yaml").write_text(
+        (DEMO / "invoice-declaration.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    run = client.post("/api/runs", json={"recipe": "my-recipe", "workbook": wb_id}, headers=LOCAL)
+    assert run.status_code == 200
+    run_id = run.json["run_id"]
+    for _ in range(server.MAX_WORKBOOKS + server.MAX_RUNS + 2):
+        assert client.post("/api/labs/lab-gate/try", json={"snippet": ""}, headers=LOCAL).status_code == 200
+    assert wb_id in server._workbooks
+    assert saved.is_file()
+    assert run_id in server._runs
+
+
+def test_lab_run_reruns_with_its_own_recipe(client):
+    """在練習結果上再處理（例如重算、做決定），要用練習的 recipe，不是換成範例 recipe。"""
+    lab = json.loads((DEMO / "labs.json").read_text(encoding="utf-8"))
+    lab = next(item for item in (lab if isinstance(lab, list) else lab.get("labs", lab.values()))
+               if item["id"] == "lab-gate")
+    tried = client.post("/api/labs/lab-gate/try", json={"snippet": lab["answer"]}, headers=LOCAL)
+    assert tried.json["ok"] is True
+    run_id = tried.json["result"]["run_id"]
+    again = client.post(f"/api/runs/{run_id}/rerun", json={}, headers=LOCAL)
+    assert again.status_code == 200
+    assert again.json["recipe"]["id"] == "lab-gate"
+    assert again.json["demo"] is True

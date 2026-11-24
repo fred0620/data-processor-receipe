@@ -375,13 +375,26 @@ def delete_recipe(recipe_id):
     return jsonify({"ok": True})
 
 
+def _trim(store: dict, limit: int) -> list[dict]:
+    """超過上限時先丟最舊的範例項目，沒有範例項目才丟使用者的；回傳被丟掉的項目。"""
+    dropped = []
+    while len(store) > limit:
+        key = next((k for k, v in store.items() if v.get("demo")), None) or next(iter(store))
+        dropped.append(store.pop(key))
+    return dropped
+
+
 def _register_workbook(source: Path, name: str, *, demo: bool = False) -> dict:
+    if demo:   # 內建範例檔不會變，重複使用同一份，練習按幾次都不會擠掉使用者的檔案
+        for workbook_id, item in _workbooks.items():
+            if item.get("demo") and item["path"] == source:
+                return {"id": workbook_id, "name": item["name"], "demo": True,
+                        "sheets": [{"name": s.name, "rows": len(s.rows)} for s in item["sheets"]]}
     sheets = read_workbook(source)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
     workbook_id = uuid.uuid4().hex[:12]
     _workbooks[workbook_id] = {"path": source, "name": name, "hash": digest, "sheets": sheets, "demo": demo}
-    while len(_workbooks) > MAX_WORKBOOKS:   # 只留最近幾份，舊的上傳檔一併刪除
-        old = _workbooks.pop(next(iter(_workbooks)))
+    for old in _trim(_workbooks, MAX_WORKBOOKS):   # 只留最近幾份，舊的上傳檔一併刪除
         if old["path"].parent == paths.UPLOADS:
             old["path"].unlink(missing_ok=True)
     log.info("載入 workbook id=%s sheets=%d", workbook_id, len(sheets))
@@ -485,23 +498,23 @@ def _run_lab_recipe(lab: dict, recipe_text: str) -> dict:
     wb_path = paths.DEMO / lab["workbook"]
     wb = _register_workbook(wb_path, wb_path.name, demo=True)
     recipe = engine.load_recipe(recipe_text)
+    # 每次試算一個暫存資料夾，留到 /api/demo/clear 或下次啟動清掉；之後在這個結果上做的決定也寫在這裡
     temp_root = paths.SCRATCH / "demo" / "labs" / uuid.uuid4().hex[:8]
     review = ReviewStore(temp_root / "reviews", recipe.id, _workbooks[wb["id"]]["hash"])
     mappings = MappingStore(temp_root / "mappings", recipe.id)
     keep: dict = {}
     with _run_lock:
         result = engine.run(recipe, _workbooks[wb["id"]]["sheets"], review, mappings, paths.SCRATCH, keep)
-    shutil.rmtree(temp_root, ignore_errors=True)
     run_id = uuid.uuid4().hex[:12]
     result["run_id"] = run_id
     result["workbook"] = {"id": wb["id"], "name": wb["name"]}
     result["decisions"] = 0
     result["can_restore"] = False
     result["demo"] = True
-    _runs[run_id] = {"recipe": f"demo:invoice-declaration", "workbook": wb["id"], "demo": True,
+    _runs[run_id] = {"recipe": f"lab:{lab['id']}", "recipe_text": recipe_text, "store_root": temp_root,
+                     "workbook": wb["id"], "demo": True,
                      "result": result, "review": review, "job": keep.get("job")}
-    while len(_runs) > MAX_RUNS:
-        _runs.pop(next(iter(_runs)))
+    _trim(_runs, MAX_RUNS)
     return result
 
 
@@ -556,11 +569,22 @@ def lab_answer(lab_id):
     return jsonify({"answer": lab.get("answer", "")})
 
 
-def _stores_for(recipe_id: str, workbook_hash: str, is_demo: bool) -> tuple[ReviewStore, MappingStore]:
-    if is_demo:
-        demo_root = paths.SCRATCH / "demo"
-        return ReviewStore(demo_root / "reviews", recipe_id, workbook_hash), MappingStore(demo_root / "mappings", recipe_id)
-    return ReviewStore(paths.REVIEWS, recipe_id, workbook_hash), MappingStore(paths.MAPPINGS, recipe_id)
+def _record_recipe(record: dict):
+    """執行紀錄用的 recipe：練習存的是合併後的文字，其他存 recipe id。"""
+    if "recipe_text" in record:
+        return engine.load_recipe(record["recipe_text"])
+    return _read_recipe(record["recipe"])
+
+
+def _store_roots(record: dict) -> tuple[Path, Path]:
+    """人工決定與對照放哪裡：練習放自己的暫存、範例放 demo 暫存、其他放正式資料夾。"""
+    if record.get("store_root"):
+        root = record["store_root"]
+        return root / "reviews", root / "mappings"
+    if record.get("demo"):
+        root = paths.SCRATCH / "demo"
+        return root / "reviews", root / "mappings"
+    return paths.REVIEWS, paths.MAPPINGS
 
 
 def _execute(run_id: str) -> dict:
@@ -569,11 +593,12 @@ def _execute(run_id: str) -> dict:
     if workbook is None:
         raise Missing("檔案已關閉，請重新上傳")
     try:
-        recipe = _read_recipe(record["recipe"])
+        recipe = _record_recipe(record)
     except engine.RecipeError as exc:
         raise _RecipeInvalid(exc) from None
     is_demo = bool(record.get("demo"))
-    review, mappings = _stores_for(recipe.id, workbook["hash"], is_demo)
+    review_root, mapping_root = _store_roots(record)
+    review, mappings = ReviewStore(review_root, recipe.id, workbook["hash"]), MappingStore(mapping_root, recipe.id)
     _jobs[run_id] = {"finished": False}
     started = time.time()
     try:
@@ -616,8 +641,7 @@ def start_run():
     is_demo = recipe_id.startswith("demo:") or bool(workbook.get("demo"))
     run_id = uuid.uuid4().hex[:12]
     _runs[run_id] = {"recipe": recipe_id, "workbook": workbook_id, "demo": is_demo}
-    while len(_runs) > MAX_RUNS:
-        _runs.pop(next(iter(_runs)))
+    _trim(_runs, MAX_RUNS)
     return jsonify(_execute(run_id))
 
 
@@ -789,7 +813,7 @@ def add_mapping(run_id):
     """補上對照：之後同一份 recipe 處理其他檔案時也會用到。target 為 null 時移除。"""
     record = _run_record(run_id)
     body = _json_body()
-    recipe = _read_recipe(record["recipe"])
+    recipe = _record_recipe(record)
     name = str(body.get("mapping", ""))
     spec = recipe.mappings.get(name)
     if spec is None:
@@ -798,8 +822,7 @@ def add_mapping(run_id):
     target = body.get("target")
     if not raw or len(raw) > 200:
         raise ValueError("原始值不正確")
-    mapping_root = (paths.SCRATCH / "demo" / "mappings") if record.get("demo") else paths.MAPPINGS
-    store = MappingStore(mapping_root, recipe.id)
+    store = MappingStore(_store_roots(record)[1], recipe.id)
     new_value = False
     if target is not None:
         target = str(target).strip()
