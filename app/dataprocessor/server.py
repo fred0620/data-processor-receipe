@@ -244,10 +244,11 @@ def live():
                     _clients[client] = time.time()
         finally:  # 連線斷了（頁面關閉、瀏覽器結束）
             with _clients_lock:
-                _live[client] -= 1
-                if _live[client] <= 0:
-                    del _live[client]
-                    _clients.pop(client, None)
+                if client in _live:
+                    _live[client] -= 1
+                    if _live[client] <= 0:
+                        del _live[client]
+                        _clients.pop(client, None)
 
     return Response(stream(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -290,9 +291,21 @@ def _demo_recipe_path(name: str) -> Path:
     return paths.DEMO / filename
 
 
+PRACTICE_ID = "practice:invoice"
+
+
+def _practice_recipe_path() -> Path:
+    return paths.SCRATCH / "demo" / "recipes" / "invoice.yaml"
+
+
 def _recipe_path(recipe_id: str) -> Path:
     if (recipe_id or "").startswith("demo:"):
         return _demo_recipe_path(recipe_id.split(":", 1)[1])
+    if recipe_id == PRACTICE_ID:
+        path = _practice_recipe_path()
+        if not path.is_file():
+            raise Missing("找不到這份 recipe")
+        return path
     if not RECIPE_ID.fullmatch(recipe_id or ""):
         raise Missing("找不到這份 recipe")
     path = paths.RECIPES / f"{recipe_id}.yaml"
@@ -313,12 +326,23 @@ def _recipe_problem(exc: engine.RecipeError):
 def list_recipes():
     items = []
     for path in sorted(paths.RECIPES.glob("*.yaml")):
-        item = {"id": path.stem, "name": path.stem, "description": "", "problems": []}
+        item = {"id": path.stem, "name": path.stem, "description": "", "problems": [], "practice": False}
         try:
             recipe = engine.load_recipe(path.read_text(encoding="utf-8"))
             item.update(id=recipe.id, name=recipe.name, description=recipe.description)
             if recipe.id != path.stem:
                 item["problems"] = [f"檔名 {path.stem}.yaml 和 id「{recipe.id}」不同，請把兩者改成一樣"]
+        except engine.RecipeError as exc:
+            item["problems"] = exc.problems
+        except (OSError, UnicodeDecodeError):
+            item["problems"] = ["無法讀取這個檔案，請確認是 UTF-8 文字檔"]
+        items.append(item)
+    practice = _practice_recipe_path()
+    if practice.is_file():
+        item = {"id": PRACTICE_ID, "name": "發票對報關單（練習）", "description": "", "problems": [], "practice": True}
+        try:
+            recipe = engine.load_recipe(practice.read_text(encoding="utf-8"))
+            item.update(name=recipe.name, description=recipe.description)
         except engine.RecipeError as exc:
             item["problems"] = exc.problems
         except (OSError, UnicodeDecodeError):
@@ -359,14 +383,25 @@ def get_recipe(recipe_id):
     return jsonify({"id": recipe_id, "text": _recipe_path(recipe_id).read_text(encoding="utf-8")})
 
 
+def _save_practice_recipe(text: str, recipe) -> dict:
+    target = _practice_recipe_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text.replace("\r\n", "\n"), encoding="utf-8")
+    log.info("儲存練習 recipe id=%s", PRACTICE_ID)
+    return {"id": PRACTICE_ID, "name": recipe.name, "practice": True}
+
+
 @app.post("/api/recipes")
 def save_recipe():
     """存 recipe：可以上傳 .yaml 檔，或貼上文字。存檔前先完整檢查，不合格的不存。"""
     upload = request.files.get("file")
+    is_practice = False
     if upload is not None:
         data = upload.read(RECIPE_LIMIT + 1)
     else:
-        data = str(_json_body().get("text", "")).encode("utf-8")
+        body = _json_body()
+        data = str(body.get("text", "")).encode("utf-8")
+        is_practice = bool(body.get("practice"))
     if len(data) > RECIPE_LIMIT:
         raise ValueError("recipe 太大（上限 512 KB）")
     try:
@@ -378,10 +413,12 @@ def save_recipe():
     except engine.RecipeError as exc:
         log.info("recipe 檢查不通過 problems=%d", len(exc.problems))
         return _recipe_problem(exc)
+    if is_practice:
+        return jsonify(_save_practice_recipe(text, recipe))
     paths.RECIPES.mkdir(parents=True, exist_ok=True)
     (paths.RECIPES / f"{recipe.id}.yaml").write_text(text.replace("\r\n", "\n"), encoding="utf-8")
     log.info("儲存 recipe id=%s", log_text(recipe.id))
-    return jsonify({"id": recipe.id, "name": recipe.name})
+    return jsonify({"id": recipe.id, "name": recipe.name, "practice": False})
 
 
 @app.delete("/api/recipes/<recipe_id>")
@@ -469,9 +506,9 @@ def demo_start():
         raise Missing("找不到內建範例檔案")
     wb = _register_workbook(wb_path, wb_path.name, demo=True)
     custom_recipe = body.get("recipe")
-    if custom_recipe == "practice-invoice":
-        recipe = _read_recipe("practice-invoice")
-        recipe_info = {"id": "practice-invoice", "name": recipe.name, "demo": True}
+    if custom_recipe == PRACTICE_ID:
+        recipe = _read_recipe(PRACTICE_ID)
+        recipe_info = {"id": PRACTICE_ID, "name": recipe.name, "demo": True}
     else:
         recipe_key = spec["recipe"]
         recipe = _read_recipe(f"demo:{recipe_key}")
@@ -497,8 +534,6 @@ def demo_clear():
     for wb_id in [k for k, v in list(_workbooks.items()) if v.get("demo")]:
         _workbooks.pop(wb_id, None)
     shutil.rmtree(paths.SCRATCH / "demo", ignore_errors=True)
-    practice = paths.RECIPES / "practice-invoice.yaml"
-    practice.unlink(missing_ok=True)
     log.info("清除範例資料")
     return jsonify({"ok": True})
 
@@ -654,7 +689,7 @@ def start_run():
     workbook = _workbooks.get(workbook_id)
     if workbook is None:
         raise Missing("檔案已關閉，請重新上傳")
-    is_demo = recipe_id.startswith("demo:") or bool(workbook.get("demo"))
+    is_demo = recipe_id.startswith(("demo:", "practice:")) or bool(workbook.get("demo"))
     run_id = uuid.uuid4().hex[:12]
     _runs[run_id] = {"recipe": recipe_id, "workbook": workbook_id, "demo": is_demo}
     _trim(_runs, MAX_RUNS)

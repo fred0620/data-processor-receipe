@@ -3,6 +3,7 @@
    所有文字都用 textContent 放進畫面，不使用 innerHTML 或 inline event handler。 */
 (function () {
   const PREF_KEY = "onboarding.v1";
+  const SAVED_WORK_KEY = "dp:savedWork";
 
   function node(tag, props = {}, ...children) {
     const el = document.createElement(tag);
@@ -29,8 +30,8 @@
     return {
       dismissed: false,
       journeys: {
-        review: { step: null, done: false, skipped: [] },
-        recipe: { step: null, done: false, skipped: [] },
+        review: { step: null, done: false, skipped: [], flags: {} },
+        recipe: { step: null, done: false, skipped: [], flags: {} },
       },
       cardsSeen: [],
       labsDone: [],
@@ -243,6 +244,7 @@
       {
         id: "review-2",
         journey: "review",
+        needs: "demoResult",
         title: "看流程卡片",
         action: "點橘色的「Match」卡片看摘要",
         tipLegend: true,
@@ -253,6 +255,7 @@
       {
         id: "review-3",
         journey: "review",
+        needs: "demoResult",
         title: "看懂再確認",
         setup: (ctx) => {
           const row = findRowByTitle(ctx.state.result, "INV-1003");
@@ -307,6 +310,7 @@
       {
         id: "review-4",
         journey: "review",
+        needs: "demoResult",
         title: "修改讀不懂的值",
         setup: (ctx) => {
           const row = findRowByTitle(ctx.state.result, "INV-1006");
@@ -343,6 +347,7 @@
       {
         id: "review-5",
         journey: "review",
+        needs: "demoResult",
         title: "補對照",
         setup: (ctx) => {
           const row = findRowByTitle(ctx.state.result, "INV-1005");
@@ -413,6 +418,7 @@
       {
         id: "review-6",
         journey: "review",
+        needs: "demoResult",
         title: "選配對候選",
         tabNeeded: "match",
         setup: (ctx) => {
@@ -451,6 +457,7 @@
       {
         id: "review-7",
         journey: "review",
+        needs: "demoResult",
         title: "回原始資料找答案",
         tabNeeded: "match",
         setup: (ctx) => {
@@ -495,6 +502,7 @@
       {
         id: "review-8",
         journey: "review",
+        needs: "demoResult",
         title: "下載",
         action: "按右上角「下載 Excel」",
         tip: "檔名會加「示範_」，和正式檔案分開",
@@ -523,6 +531,7 @@
       {
         id: "recipe-2",
         journey: "recipe",
+        needs: "recipeDialog",
         title: "複製規格",
         action: "按「複製規格給 AI」",
         tip: "實際使用時連同欄位與規則貼給 AI",
@@ -533,6 +542,7 @@
       {
         id: "recipe-3",
         journey: "recipe",
+        needs: "recipeDialog",
         title: "貼上 AI 的回覆",
         action: "按「幫我貼上練習回覆」，再按下一步",
         tip: "這份回覆故意留了 2 個問題",
@@ -549,12 +559,13 @@
           },
         },
         target: (ctx) => (ctx.flags.pastedDraft ? '[data-guide="recipe-next"]' : '[data-guide="dialog-assist"]'),
-        pointer: (ctx) => (ctx.flags.pastedDraft ? "↑ 下一步：確認說明" : "↑ 貼上練習回覆"),
+        pointer: (ctx) => (ctx.flags.pastedDraft ? "↑ 下一步" : "↑ 貼上練習回覆"),
         done: (ctx) => Boolean(ctx.flags.sawProblems),
       },
       {
         id: "recipe-4",
         journey: "recipe",
+        needs: "recipeDialog",
         title: "修正問題",
         sub: [
           {
@@ -562,7 +573,7 @@
             action: "按「複製問題給 AI」",
             tip: "問題附行號，AI 看得懂",
             target: '[data-guide="problems-copy"]',
-            pointer: "← 複製問題給 AI",
+            pointer: "← 複製問題",
             done: (ctx) => Boolean(ctx.flags.copiedProblems),
           },
           {
@@ -582,7 +593,7 @@
               },
             },
             target: (ctx) => (ctx.flags.pastedFixed ? '[data-guide="recipe-next"]' : '[data-guide="dialog-assist"]'),
-            pointer: (ctx) => (ctx.flags.pastedFixed ? "↑ 下一步：確認說明" : "↑ 貼上修正版"),
+            pointer: (ctx) => (ctx.flags.pastedFixed ? "↑ 下一步" : "↑ 貼上修正版"),
             done: (ctx) => Boolean(ctx.flags.sawExplain),
           },
         ],
@@ -591,12 +602,13 @@
       {
         id: "recipe-5",
         journey: "recipe",
+        needs: "recipeDialog",
         title: "看說明再儲存",
         action: "讀完說明，按「確認並儲存」",
         tip: "每一列會經過哪些判斷都寫在這裡",
         target: '[data-guide="recipe-save"]',
         pointer: "↑ 確認並儲存",
-        done: (ctx) => ctx.state.recipes.some((r) => r.id === "practice-invoice"),
+        done: (ctx) => Boolean(ctx.flags.practiceSaved && ctx.state.recipes.some((r) => r.practice === true)),
       },
     ],
   };
@@ -656,7 +668,7 @@
           action: "照目標寫，或複製提問給 AI",
           tip: "寫完按 Ctrl+Enter 或點一下外面",
           target: '[data-guide="lab-copy-ai"]',
-          pointer: "← 複製給 AI",
+          pointer: "↓ 複製提問",
           done: () => Boolean(labState.snippetCommitted && labState.snippet.trim().length > 0),
         },
         {
@@ -666,7 +678,7 @@
           action: "按「試算」，全部打勾才算完成",
           tip: "不對會列出哪一列、抓到什麼、應該是什麼",
           target: '[data-guide="lab-try"]',
-          pointer: "← 按這裡試算",
+          pointer: "↓ 試算",
           noSkip: true,
           done: () => Boolean(labState.passed),
         },
@@ -703,6 +715,7 @@
     init(bridge) {
       this.bridge = bridge;
       this.loadPrefs();
+      this.loadSavedWork();
       if (bridge.isPopout) return;
       this.bindGlobal();
       this.renderWelcome();
@@ -716,8 +729,8 @@
           ...base,
           ...saved,
           journeys: {
-            review: { ...base.journeys.review, ...(saved.journeys?.review || {}) },
-            recipe: { ...base.journeys.recipe, ...(saved.journeys?.recipe || {}) },
+            review: { ...base.journeys.review, ...(saved.journeys?.review || {}), flags: { ...(saved.journeys?.review?.flags || {}) } },
+            recipe: { ...base.journeys.recipe, ...(saved.journeys?.recipe || {}), flags: { ...(saved.journeys?.recipe?.flags || {}) } },
           },
           tipsSeen: { ...base.tipsSeen, ...(saved.tipsSeen || {}) },
           cardsSeen: Array.isArray(saved.cardsSeen) ? saved.cardsSeen : [],
@@ -732,12 +745,46 @@
       this.bridge.prefs.set(PREF_KEY, this.prefs);
     },
 
+    loadSavedWork() {
+      try {
+        const raw = window.sessionStorage.getItem(SAVED_WORK_KEY);
+        this.savedWork = raw ? JSON.parse(raw) : null;
+      } catch (_e) {
+        this.savedWork = null;
+      }
+    },
+
+    persistSavedWork() {
+      try {
+        if (this.savedWork) window.sessionStorage.setItem(SAVED_WORK_KEY, JSON.stringify(this.savedWork));
+        else window.sessionStorage.removeItem(SAVED_WORK_KEY);
+      } catch (_e) { /* 略過 */ }
+    },
+
+    clearSavedWork() {
+      this.savedWork = null;
+      this.persistSavedWork();
+    },
+
     isActive() {
       return Boolean(this.activeJourney);
     },
 
+    isJourneyBActive() {
+      return this.activeJourney === "recipe" && !this.prefs.journeys.recipe?.done;
+    },
+
     isLabActive() {
       return Boolean(this.labState);
+    },
+
+    isShowingDemo() {
+      const s = this.bridge?.state;
+      if (!s) return false;
+      return Boolean(
+        this.activeJourney === "review" || s.result?.demo || this.labState || s.workbook?.demo
+        || (s.recipeId && (s.recipeId.startsWith("demo:") || s.recipeId.startsWith("practice:")))
+      );
     },
 
     shouldShowJkTip() {
@@ -766,6 +813,7 @@
         if (this.scrollRaf) return;
         this.scrollRaf = requestAnimationFrame(() => {
           this.scrollRaf = null;
+          if (this.activeFloat) this.placeFloat(this.activeFloat.node, this.activeFloat.opener);
           this.syncEmphasis();
         });
       };
@@ -845,10 +893,11 @@
           node("p", { class: "welcome-note", text: "左邊選好 recipe、放入 Excel，按「執行」。" })));
     },
 
-    /* 保存／還原使用者的正式工作狀態 */
+    /* 保存／還原使用者的正式工作狀態（已有 savedWork 時不覆蓋） */
     captureWork() {
+      if (this.savedWork) return;
       const s = this.bridge.state;
-      if (s.result?.demo || this.labState) return;
+      if (this.isShowingDemo()) return;
       if (!s.result && !s.workbook) return;
       const layout = document.querySelector(".layout");
       const drawerW = layout ? parseInt(getComputedStyle(layout).getPropertyValue("--drawer-w"), 10) : null;
@@ -861,13 +910,28 @@
         search: s.search,
         selected: s.selected,
         matchName: s.matchName,
+        matchFilter: s.matchFilter,
+        matchSearch: s.matchSearch,
         drawerW,
       };
+      this.persistSavedWork();
+    },
+
+    /* 離開範例或練習的統一出口 */
+    async leaveDemo({ dismiss = false } = {}) {
+      const wasDemo = this.isShowingDemo();
+      this.stopJourney(dismiss);
+      if (!wasDemo) return;
+      if (this.savedWork) {
+        await this.restoreWork();
+      } else {
+        this.clearDemoView();
+      }
     },
 
     async restoreWork() {
       const saved = this.savedWork;
-      this.savedWork = null;
+      this.clearSavedWork();
       this.stopJourney(false);
       this.labState = null;
       this.labJourney = null;
@@ -887,6 +951,7 @@
           Object.assign(s, {
             tab: saved.tab, filter: saved.filter, search: saved.search,
             selected: saved.selected, matchName: saved.matchName,
+            matchFilter: saved.matchFilter || "todo", matchSearch: saved.matchSearch || "",
           });
           this.bridge.renderTabs();
           return;
@@ -913,8 +978,8 @@
         if (label) label.textContent = "選擇或拖曳 Excel 檔（.xlsx）";
         if (info) info.replaceChildren();
       }
-      if (s.recipeId && s.recipeId.startsWith("demo:")) {
-        s.recipeId = (s.recipes.find((r) => !r.problems.length) || {}).id || null;
+      if (s.recipeId && (s.recipeId.startsWith("demo:") || s.recipeId.startsWith("practice:"))) {
+        s.recipeId = (s.recipes.find((r) => !r.problems.length && !r.practice) || {}).id || null;
       }
       const resultEl = document.getElementById("result");
       const emptyEl = document.getElementById("empty");
@@ -929,7 +994,7 @@
 
     /* 已有工作時先詢問是否切換範例（4.1） */
     requestStartJourney(id, opts = {}) {
-      if (id === "review" && !opts.force && !this.bridge.state.result?.demo && (this.bridge.state.result || this.bridge.state.workbook)) {
+      if (id === "review" && !opts.force && !this.isShowingDemo() && (this.bridge.state.result || this.bridge.state.workbook)) {
         this.openConfirmDemoCard(() => this.startJourney(id, { ...opts, force: true }));
         return;
       }
@@ -951,64 +1016,141 @@
       this.showFloat("confirmDemoCard", card, document.getElementById("helpBtn"));
     },
 
+    needsSatisfied(step) {
+      if (!step?.needs) return true;
+      if (step.needs === "demoResult") return this.bridge.state.result?.demo === true;
+      if (step.needs === "recipeDialog") return Boolean(document.getElementById("dialog")?.open);
+      return true;
+    },
+
     async startJourney(id, opts = {}) {
       if (this.bridge?.isPopout) return;
+      const gen = (this.journeyGen = (this.journeyGen || 0) + 1);
       this.closeFloat();
       this.closeSpotlight();
       this.labState = null;
       this.labJourney = null;
 
-      if (id === "review") {
-        this.captureWork();
-        this.flags = {};
-        try {
-          const body = opts.recipe ? { journey: "review", recipe: opts.recipe } : { journey: "review" };
-          const data = await this.bridge.post("/api/demo/start", body);
-          this.bridge.state.recipeId = data.recipe.id;
-          this.bridge.state.demoRecipe = data.recipe;
-          this.bridge.setWorkbook(data.workbook);
-          // 若是重新開始，先收起舊的結果畫面回到第 1 步
-          if (!opts.keepResult) {
-            this.bridge.state.result = null;
-            this.bridge.state.selected = null;
-            document.getElementById("result").hidden = true;
-            document.getElementById("empty").hidden = false;
-            this.bridge.renderDrawer();
-          }
-          this.bridge.renderRecipes();
-        } catch (err) {
-          this.bridge.toast(err.message || "無法載入範例資料", true);
-          return;
-        }
-      } else if (id === "recipe") {
-        this.flags = {};
-        // 每次開始關卡 B 先刪掉既有的 practice-invoice
-        await this.bridge.api("/api/recipes/practice-invoice", { method: "DELETE" }).catch(() => {});
-        await this.bridge.loadRecipes();
-      }
-
-      this.activeJourney = id;
-      const jp = this.prefs.journeys[id] || { step: null, done: false, skipped: [] };
-      if (opts.restart || jp.done) {
+      const jp = this.prefs.journeys[id] || { step: null, done: false, skipped: [], flags: {} };
+      const isReset = Boolean(opts.restart || jp.done);
+      if (isReset) {
         jp.step = null;
         jp.done = false;
         jp.skipped = [];
+        jp.flags = {};
       }
       this.prefs.journeys[id] = jp;
       this.prefs.dismissed = false;
       this.savePrefs();
 
-      const def = this.currentJourneyDef();
-      this.stepId = (jp.step && def.steps.some((s) => s.id === jp.step)) ? jp.step : def.steps[0].id;
+      const def = JOURNEYS[id];
+      const resuming = !isReset && Boolean(jp.step && jp.step !== def.steps[0].id && def.steps.some((s) => s.id === jp.step));
+      this.flags = resuming ? { ...(jp.flags || {}) } : {};
+
+      if (id === "review") {
+        this.captureWork();
+        this.activeJourney = id;
+        const targetStepId = resuming ? jp.step : def.steps[0].id;
+        const targetStep = def.steps.find((s) => s.id === targetStepId) || def.steps[0];
+
+        if (resuming && targetStep.needs === "demoResult" && !this.bridge.state.result?.demo) {
+          // 續玩第 2 步以後且畫面沒有範例結果：自動準備並執行範例資料
+          const strip = document.getElementById("missionStrip");
+          const bar = document.getElementById("guideBar");
+          if (bar) bar.hidden = false;
+          if (strip) {
+            strip.hidden = false;
+            put(strip, node("span", { class: "mission-badge", text: "…" }),
+              node("div", { class: "mission-main" }, node("div", { class: "mission-action", text: "正在準備範例資料…" })));
+          }
+          try {
+            const body = opts.recipe ? { journey: "review", recipe: opts.recipe } : { journey: "review" };
+            const data = await this.bridge.post("/api/demo/start", body);
+            if (this.journeyGen !== gen) return;
+            this.bridge.state.recipeId = data.recipe.id;
+            this.bridge.state.demoRecipe = data.recipe;
+            this.bridge.setWorkbook(data.workbook);
+            const run = await this.bridge.post("/api/runs", { recipe: data.recipe.id, workbook: data.workbook.id });
+            if (this.journeyGen !== gen) return;
+            this.bridge.setResult(run, true);
+            this.bridge.renderRecipes();
+            // 推到第一個未完成的步驟（不超過存的步驟）
+            const savedIdx = def.steps.findIndex((s) => s.id === jp.step);
+            const ctx = this.ctx();
+            let pick = def.steps[savedIdx];
+            for (let i = 0; i <= savedIdx; i++) {
+              if (!def.steps[i].done(ctx)) { pick = def.steps[i]; break; }
+            }
+            this.stepId = pick.id;
+          } catch (_err) {
+            if (this.journeyGen !== gen) return;
+            // 準備失敗：回到第 1 步並更新 prefs
+            this.stepId = def.steps[0].id;
+            jp.step = def.steps[0].id;
+            this.savePrefs();
+            this.bridge.toast("無法自動準備範例資料，請從第 1 步開始");
+          }
+        } else {
+          const runBtn = document.getElementById("runButton");
+          if (runBtn) runBtn.disabled = true;
+          try {
+            const body = opts.recipe ? { journey: "review", recipe: opts.recipe } : { journey: "review" };
+            const data = await this.bridge.post("/api/demo/start", body);
+            if (this.journeyGen !== gen) return;
+            this.bridge.state.recipeId = data.recipe.id;
+            this.bridge.state.demoRecipe = data.recipe;
+            this.bridge.setWorkbook(data.workbook);
+            if (!opts.keepResult && !resuming) {
+              this.bridge.state.result = null;
+              this.bridge.state.selected = null;
+              document.getElementById("result").hidden = true;
+              document.getElementById("empty").hidden = false;
+              this.bridge.renderDrawer();
+            }
+            this.bridge.renderRecipes();
+          } catch (err) {
+            if (this.journeyGen !== gen) return;
+            this.stepId = def.steps[0].id;
+            jp.step = def.steps[0].id;
+            this.savePrefs();
+            this.bridge.toast(err.message || "無法載入範例資料", true);
+          }
+          this.stepId = resuming && this.needsSatisfied(targetStep) ? targetStep.id : def.steps[0].id;
+          jp.step = this.stepId;
+          this.savePrefs();
+        }
+      } else if (id === "recipe") {
+        // 每次開始關卡 B 只刪暫存空間裡的 practice:invoice，絕不碰 workspace/recipes
+        if (!resuming) {
+          await this.bridge.api("/api/recipes/practice%3Ainvoice", { method: "DELETE" }).catch(() => {});
+          if (this.journeyGen !== gen) return;
+          await this.bridge.loadRecipes();
+          if (this.journeyGen !== gen) return;
+        }
+        this.activeJourney = id;
+        const targetStep = resuming ? (def.steps.find((s) => s.id === jp.step) || def.steps[0]) : def.steps[0];
+        if (targetStep.needs === "recipeDialog" && !document.getElementById("dialog")?.open) {
+          this.stepId = def.steps[0].id;
+          this.flags.openedRecipeDialog = false;
+          jp.step = def.steps[0].id;
+          this.savePrefs();
+        } else {
+          this.stepId = targetStep.id;
+        }
+      }
+
+      if (this.journeyGen !== gen) return;
       this.subId = null;
       this.lastStepId = null;
       this.lastStepDone = false;
+      this.setupTriedStep = null;
       this.renderGuide();
       this.runStepSetup(this.currentStep());
       this.schedule();
     },
 
     stopJourney(markDismissed = true) {
+      this.journeyGen = (this.journeyGen || 0) + 1;
       this.activeJourney = null;
       this.stepId = null;
       this.subId = null;
@@ -1195,11 +1337,11 @@
         node("div", { class: "guide-bar-actions" },
           def.isLab ? node("button", {
             type: "button", class: "ghost small", text: "結束練習",
-            onclick: () => this.restoreWork(),
+            onclick: () => this.leaveDemo({ dismiss: false }),
           }) : null,
           node("button", {
             type: "button", class: "ghost small", text: "關閉導覽",
-            onclick: () => this.stopJourney(true),
+            onclick: () => this.leaveDemo({ dismiss: true }),
           })));
 
       strip.hidden = false;
@@ -1267,12 +1409,11 @@
       if (def.id === "review") {
         const remaining = (this.bridge.state.result?.output?.rows || []).filter((r) => r.status === "review").length;
         const primaryBtn = this.savedWork
-          ? node("button", { type: "button", class: "primary small", text: "回到我的工作", onclick: () => this.restoreWork() })
+          ? node("button", { type: "button", class: "primary small", text: "回到我的工作", onclick: () => this.leaveDemo({ dismiss: false }) })
           : node("button", {
             type: "button", class: "primary small", text: "用自己的資料開始",
-            onclick: () => {
-              this.stopJourney(false);
-              this.clearDemoView();
+            onclick: async () => {
+              await this.leaveDemo({ dismiss: false });
               this.openSpotlight("own-data", { target: "#dropZone", pointer: "← 放進 Excel 檔", action: "把你的 Excel 拖到左邊，選好 recipe 再按「執行」" });
             },
           });
@@ -1288,8 +1429,7 @@
               type: "button", class: "link", text: "清掉範例資料",
               onclick: async () => {
                 await this.bridge.post("/api/demo/clear", {});
-                this.stopJourney(false);
-                this.clearDemoView();
+                await this.leaveDemo({ dismiss: false });
                 await this.bridge.loadRecipes();
                 this.bridge.toast("已清掉範例資料");
               },
@@ -1303,14 +1443,14 @@
           node("div", { class: "mission-actions" },
             node("button", {
               type: "button", class: "primary small", text: "用它處理範例資料",
-              onclick: () => this.startJourney("review", { recipe: "practice-invoice", restart: true }),
+              onclick: () => this.startJourney("review", { recipe: "practice:invoice", restart: true }),
             }),
             node("button", {
               type: "button", class: "link", text: "刪除練習 recipe",
               onclick: async () => {
-                await this.bridge.api("/api/recipes/practice-invoice", { method: "DELETE" }).catch(() => {});
+                await this.bridge.api("/api/recipes/practice%3Ainvoice", { method: "DELETE" }).catch(() => {});
                 await this.bridge.loadRecipes();
-                this.stopJourney(false);
+                await this.leaveDemo({ dismiss: false });
                 this.bridge.toast("已刪除練習 recipe");
               },
             })));
@@ -1322,7 +1462,7 @@
             node("div", { class: "mission-action", text: "練習完成" }),
             node("div", { class: "mission-tip", text: card?.learned || "" })),
           node("div", { class: "mission-actions" },
-            node("button", { type: "button", class: "primary small", text: "回到我的工作", onclick: () => this.restoreWork() })));
+            node("button", { type: "button", class: "primary small", text: "回到我的工作", onclick: () => this.leaveDemo({ dismiss: false }) })));
       }
     },
 
@@ -1443,7 +1583,29 @@
       }
 
       const targetEl = this.resolveEl(spec.target);
-      if (!targetEl) return;
+      if (!targetEl) {
+        // 目標元素不存在：先呼叫一次 setup()，仍不存在則退回上一個 needs 滿足的步驟
+        if (def && !def.isLab) {
+          const step = this.currentStep();
+          if (step && this.setupTriedStep !== step.id) {
+            this.setupTriedStep = step.id;
+            this.runStepSetup(step);
+            if (this.resolveEl(spec.target)) { this.syncEmphasis(); return; }
+          }
+          if (step && !this.needsSatisfied(step)) {
+            const idx = def.steps.indexOf(step);
+            const fallback = def.steps.slice(0, idx).reverse().find((s) => this.needsSatisfied(s)) || def.steps[0];
+            if (fallback && fallback.id !== step.id) {
+              this.stepId = fallback.id;
+              const jp = this.prefs.journeys[def.id];
+              if (jp) { jp.step = fallback.id; this.savePrefs(); }
+              this.renderGuide();
+              this.syncEmphasis();
+            }
+          }
+        }
+        return;
+      }
       const inDialog = dialogOpen && Boolean(targetEl.closest("#dialog"));
       if (dialogOpen && !inDialog) return;
 
@@ -1482,7 +1644,7 @@
         : offBottom ? `↓ ${label.replace(/^[←→↑↓]\s*/, "")}`
           : label;
       ptr.hidden = false;
-      const pw = ptr.offsetWidth || 100;
+      const pw = ptr.offsetWidth || 80;
       const ph = ptr.offsetHeight || 26;
 
       if (offTop || offBottom) {
@@ -1498,24 +1660,55 @@
         document.getElementById("missionStrip"),
       ].filter((n) => n && !n.hidden).map((n) => n.getBoundingClientRect());
 
+      // 加入同操作列（或父容器）裡除了目標以外的可點元素作為障礙物
+      const actionBar = el.closest(".lab-actions, .dialog-actions, .drawer-foot, .actions, .toolbar, .inline-fix, .mission-actions") || el.parentElement;
+      if (actionBar) {
+        for (const sib of actionBar.querySelectorAll("button, a, input, select, textarea")) {
+          if (sib === el || sib.contains(el) || el.contains(sib) || sib.hidden) continue;
+          const sr = sib.getBoundingClientRect();
+          if (sr.width > 0 && sr.height > 0) obstacles.push(sr);
+        }
+      }
+
       const gap = 10;
+      const barRect = actionBar ? actionBar.getBoundingClientRect() : rect;
       const candidates = [
         { side: "right", left: rect.right + gap, top: rect.top + (rect.height - ph) / 2 },
         { side: "left", left: rect.left - pw - gap, top: rect.top + (rect.height - ph) / 2 },
         { side: "bottom", left: rect.left + (rect.width - pw) / 2, top: rect.bottom + gap },
         { side: "top", left: rect.left + (rect.width - pw) / 2, top: rect.top - ph - gap },
+        { side: "bottom", left: rect.left + (rect.width - pw) / 2, top: barRect.bottom + gap },
+        { side: "top", left: rect.left + (rect.width - pw) / 2, top: barRect.top - ph - gap },
       ];
 
-      const overlaps = (c) => {
+      const clamp = (c) => ({
+        side: c.side,
+        left: Math.max(8, Math.min(c.left, vw - pw - 8)),
+        top: Math.max(8, Math.min(c.top, vh - ph - 8)),
+      });
+
+      const overlapArea = (c) => {
         const cr = { left: c.left, top: c.top, right: c.left + pw, bottom: c.top + ph };
-        if (cr.left < 6 || cr.right > vw - 6 || cr.top < 6 || cr.bottom > vh - 6) return true;
-        return obstacles.some((o) => !(cr.right <= o.left || cr.left >= o.right || cr.bottom <= o.top || cr.top >= o.bottom));
+        let area = 0;
+        for (const o of obstacles) {
+          const ox = Math.max(0, Math.min(cr.right, o.right) - Math.max(cr.left, o.left));
+          const oy = Math.max(0, Math.min(cr.bottom, o.bottom) - Math.max(cr.top, o.top));
+          area += ox * oy;
+        }
+        return area;
       };
 
-      const chosen = candidates.find((c) => !overlaps(c)) || candidates[0];
+      const inBounds = (c) => c.left >= 6 && c.left + pw <= vw - 6 && c.top >= 6 && c.top + ph <= vh - 6;
+
+      let chosen = candidates.find((c) => inBounds(c) && overlapArea(c) === 0);
+      if (!chosen) {
+        chosen = candidates.map(clamp).sort((a, b) => overlapArea(a) - overlapArea(b))[0];
+      } else {
+        chosen = clamp(chosen);
+      }
       ptr.dataset.side = chosen.side;
-      ptr.style.left = `${Math.max(8, Math.min(chosen.left, vw - pw - 8))}px`;
-      ptr.style.top = `${Math.max(8, Math.min(chosen.top, vh - ph - 8))}px`;
+      ptr.style.left = `${chosen.left}px`;
+      ptr.style.top = `${chosen.top}px`;
     },
 
     openSpotlight(id, opts = {}) {
@@ -1545,17 +1738,20 @@
     placeFloat(card, opener) {
       const vw = window.innerWidth;
       const vh = window.innerHeight;
+      card.style.maxHeight = "calc(100vh - 66px)";
       const w = card.offsetWidth || 320;
-      if (opener) {
+      const h = card.offsetHeight || 200;
+      let rawLeft = vw - w - 16;
+      let rawTop = 56;
+      if (opener && opener.isConnected) {
         const r = opener.getBoundingClientRect();
-        const left = Math.max(12, Math.min(r.right - w, vw - w - 12));
-        const top = Math.min(r.bottom + 8, vh - Math.min(card.offsetHeight || 240, vh - 24) - 12);
-        card.style.left = `${left}px`;
-        card.style.top = `${Math.max(54, top)}px`;
-      } else {
-        card.style.left = `${Math.max(12, vw - w - 16)}px`;
-        card.style.top = "56px";
+        rawLeft = r.right - w;
+        rawTop = r.bottom + 8;
       }
+      const left = Math.max(12, Math.min(rawLeft, Math.max(12, vw - w - 12)));
+      const top = Math.max(54, Math.min(rawTop, Math.max(54, vh - h - 12)));
+      card.style.left = `${left}px`;
+      card.style.top = `${top}px`;
     },
 
     closeFloat(restoreFocus = false) {
@@ -1830,7 +2026,7 @@
           node("div", { class: "lab-done-box" },
             node("p", { text: lab.card.learned }),
             node("div", { class: "lab-actions" },
-              node("button", { type: "button", class: "primary small", text: "回到我的工作", onclick: () => this.restoreWork() }),
+              node("button", { type: "button", class: "primary small", text: "回到我的工作", onclick: () => this.leaveDemo({ dismiss: false }) }),
               node("button", { type: "button", class: "ghost small", text: "再練一次", onclick: () => this.startLab(lab.id) }),
               node("a", { class: "link", href: `/manual#${lab.card.anchor}`, target: "_blank", rel: "noopener", text: "看手冊 ↗" }))));
         put(foot);
@@ -2090,30 +2286,42 @@
       this.showFloat("whatsNewHistory", card, opener);
     },
 
+    persistFlag(name, value = true) {
+      this.flags[name] = value;
+      const jp = this.activeJourney && this.prefs.journeys[this.activeJourney];
+      if (jp) {
+        jp.flags = jp.flags || {};
+        jp.flags[name] = Boolean(value);
+        this.savePrefs();
+      }
+    },
+
     /* ---------- 事件通知 ---------- */
     notify(event, payload = {}) {
       if (this.bridge?.isPopout) return;
       if (event === "stage-open") {
-        if (payload.status === "review" || payload.id === "match") this.flags.sawStage = true;
+        if (payload.status === "review" || payload.id === "match") this.persistFlag("sawStage", true);
         if (this.labState && payload.id === "gate") this.labState.sawProblem = true;
       } else if (event === "trace-open") {
         const row = findRowByTitle(this.bridge.state.result, "INV-1003");
-        if (row && payload.rid === row.rid) this.flags.sawTrace = true;
+        if (row && payload.rid === row.rid) this.persistFlag("sawTrace", true);
       } else if (event === "source-open") {
-        this.flags.sawSource = true;
+        this.persistFlag("sawSource", true);
       } else if (event === "demo-export") {
-        if (this.bridge.state.result?.demo) this.flags.demoExported = true;
+        if (this.bridge.state.result?.demo) this.persistFlag("demoExported", true);
       } else if (event === "recipe-dialog") {
         this.flags.recipeDialogOpen = true;
-        this.flags.openedRecipeDialog = true;
+        this.persistFlag("openedRecipeDialog", true);
       } else if (event === "spec-copied") {
-        this.flags.copiedSpec = true;
+        this.persistFlag("copiedSpec", true);
       } else if (event === "problems-shown") {
-        this.flags.sawProblems = true;
+        this.persistFlag("sawProblems", true);
       } else if (event === "problems-copied") {
-        this.flags.copiedProblems = true;
+        this.persistFlag("copiedProblems", true);
       } else if (event === "explain-shown") {
-        this.flags.sawExplain = true;
+        this.persistFlag("sawExplain", true);
+      } else if (event === "practice-saved") {
+        this.persistFlag("practiceSaved", true);
       } else if (event === "bad-edit") {
         this.flags.badEdit = payload;
       } else if (event === "good-edit") {

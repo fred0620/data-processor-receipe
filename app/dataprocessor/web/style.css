@@ -905,6 +905,15 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 @media (max-width: 1120px) {
   .guide-dots { display: none; }
 }
+/* 900px 以下（非主要支援，仍保持可用）：指令條兩行、歡迎卡滿寬 */
+@media (max-width: 899px) {
+  .work { padding: 16px 16px 32px; }
+  .guide-bar { margin: -16px -16px 0; }
+  .mission-strip { flex-wrap: wrap; margin: 8px 0 12px; gap: 8px 10px; }
+  .mission-main { flex: 1 1 calc(100% - 36px); }
+  .mission-actions { width: 100%; justify-content: flex-end; }
+  .welcome { max-width: 100%; width: 100%; margin-top: 12px; }
+}
 
 /* popout 隱藏所有導覽與教學元件 */
 body.popout #helpBtn,

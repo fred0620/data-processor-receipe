@@ -74,18 +74,60 @@ def test_demo_does_not_pollute_workspace_and_clears(client):
     assert "示範_" in cd or "%E7%A4%BA%E7%AF%84_" in cd
     assert any(p.name.startswith("示範_") for p in server.paths.OUTPUT.glob("*.xlsx"))
 
-    # 練習 recipe 也會在 /api/demo/clear 被清掉
+    # 練習 recipe 存在暫存空間，使用者的同名 recipe 不受影響
+    user_practice = server.paths.RECIPES / "practice-invoice.yaml"
+    user_content = (EXAMPLES / "recipes" / "invoice-declaration.yaml").read_text(encoding="utf-8").replace(
+        "id: invoice-declaration", "id: practice-invoice"
+    ).replace("name: 發票對報關單（範例）", "name: 我的正式發票規則")
+    user_practice.write_text(user_content, encoding="utf-8")
+    orig_mtime = user_practice.stat().st_mtime_ns
+
     fixed = client.get("/api/demo/recipe/recipe-fixed", headers=LOCAL)
     assert fixed.status_code == 200
-    saved = client.post("/api/recipes", json={"text": fixed.json["text"]}, headers=LOCAL)
-    assert saved.status_code == 200 and saved.json["id"] == "practice-invoice"
-    assert (server.paths.RECIPES / "practice-invoice.yaml").exists()
+    saved = client.post("/api/recipes", json={"text": fixed.json["text"], "practice": True}, headers=LOCAL)
+    assert saved.status_code == 200
+    assert saved.json["id"] == "practice:invoice"
+    assert saved.json["practice"] is True
+    assert (server.paths.SCRATCH / "demo" / "recipes" / "invoice.yaml").exists()
 
+    # GET /api/recipes 同時列出使用者的 practice-invoice 與練習的 practice:invoice
+    listed = client.get("/api/recipes", headers=LOCAL).json["recipes"]
+    user_item = next(r for r in listed if r["id"] == "practice-invoice")
+    prac_item = next(r for r in listed if r["id"] == "practice:invoice")
+    assert not user_item.get("practice")
+    assert prac_item.get("practice") is True
+
+    # 刪除練習 recipe 與 /api/demo/clear 都不會動到使用者的檔案
+    assert client.delete("/api/recipes/practice:invoice", headers=LOCAL).status_code == 200
+    assert not (server.paths.SCRATCH / "demo" / "recipes" / "invoice.yaml").exists()
+    assert user_practice.exists()
+    assert user_practice.read_text(encoding="utf-8") == user_content
+    assert user_practice.stat().st_mtime_ns == orig_mtime
+
+    # 再存一次並呼叫 /api/demo/clear
+    assert client.post("/api/recipes", json={"text": fixed.json["text"], "practice": True}, headers=LOCAL).status_code == 200
     cleared = client.post("/api/demo/clear", json={}, headers=LOCAL)
     assert cleared.status_code == 200
     assert not (server.paths.SCRATCH / "demo").exists()
-    assert not (server.paths.RECIPES / "practice-invoice.yaml").exists()
+    assert user_practice.exists()
+    assert user_practice.read_text(encoding="utf-8") == user_content
+    assert user_practice.stat().st_mtime_ns == orig_mtime
     assert client.get(f"/api/runs/{run_id}", headers=LOCAL).status_code == 404
+
+
+def test_practice_save_creates_nothing_in_workspace_recipes(client):
+    fixed = client.get("/api/demo/recipe/recipe-fixed", headers=LOCAL)
+    assert fixed.status_code == 200
+    res = client.post("/api/recipes", json={"text": fixed.json["text"], "practice": True}, headers=LOCAL)
+    assert res.status_code == 200
+    assert list(server.paths.RECIPES.glob("*.yaml")) == []
+
+
+def test_demo_and_practice_code_never_touches_workspace_recipes():
+    import inspect
+    for fn in (server.demo_start, server.demo_recipe, server.demo_clear, server.start_lab, server.try_lab):
+        src = inspect.getsource(fn)
+        assert "paths.RECIPES" not in src, f"{fn.__name__} 不應引用 paths.RECIPES"
 
 
 def test_demo_draft_has_two_problems_and_fixed_is_valid(client):

@@ -240,17 +240,22 @@ function setupPanes() {
       prefs.set(`${name}Width`, paneWidth(name, now + (pane.edge === "left" ? step : -step)));
     });
   }
-  const collapse = (on) => {
+  const collapse = (on, save = true) => {
     layout.classList.toggle("side-collapsed", on);
     $("sideToggle").title = on ? "展開左欄" : "收起左欄";
     $("sideToggle").setAttribute("aria-label", $("sideToggle").title);
     $("sideToggle").setAttribute("aria-pressed", String(on));
-    prefs.set("sideCollapsed", on);
+    if (save) prefs.set("sideCollapsed", on);
   };
-  collapse(prefs.get("sideCollapsed", false));
-  $("sideToggle").addEventListener("click", () => collapse(!layout.classList.contains("side-collapsed")));
+  const syncNarrow = () => {
+    if (window.innerWidth < 900) collapse(true, false);
+    else collapse(prefs.get("sideCollapsed", false), false);
+  };
+  syncNarrow();
+  $("sideToggle").addEventListener("click", () => collapse(!layout.classList.contains("side-collapsed"), true));
   window.addEventListener("resize", () => {
     for (const [name, pane] of Object.entries(PANES)) paneWidth(name, prefs.get(`${name}Width`, pane.fallback));
+    syncNarrow();
   });
 }
 
@@ -277,7 +282,7 @@ function renderRecipes() {
         type: "button", class: `recipe-item${r.id === state.recipeId ? " active" : ""}`,
         onclick: () => { state.recipeId = r.id; renderRecipes(); },
       },
-      el("div", { class: "name" }, r.name, r.id === "practice-invoice" ? el("span", { class: "demo-tag", text: "練習" }) : null),
+      el("div", { class: "name" }, r.name, r.practice ? el("span", { class: "demo-tag", text: "練習" }) : null),
       r.description ? el("div", { class: "desc", text: r.description }) : null,
       r.problems.length ? el("div", { class: "bad", text: `有 ${r.problems.length} 個問題，無法使用` }) : null),
       r.id === state.recipeId ? el("div", { class: "recipe-tools" },
@@ -362,9 +367,12 @@ function editRecipe(text = "") {
   };
   const save = async () => {
     try {
-      const data = await post("/api/recipes", { text: area.value });
+      const payload = { text: area.value };
+      if (guide()?.isJourneyBActive()) payload.practice = true;
+      const data = await post("/api/recipes", payload);
       closeDialog();
       await loadRecipes(data.id);
+      if (data.practice) guide()?.notify("practice-saved");
       /* 正在看的結果用的就是這份 recipe：直接用新版重新處理，人工修改與確認都會保留 */
       if (state.result && state.result.recipe.id === data.id && await act("rerun")) {
         toast(`已儲存「${data.name}」，並用新版重新處理目前的檔案`);
@@ -408,6 +416,7 @@ async function uploadWorkbook(file) {
   const form = new FormData();
   form.append("file", file);
   try {
+    guide()?.clearSavedWork();
     setWorkbook(await api("/api/workbooks", { method: "POST", body: form }));
   } catch (error) { showError(error); }
 }
@@ -426,13 +435,13 @@ async function loadSamples() {
     const data = await api("/api/samples");
     $("sampleBox").replaceChildren(...data.samples.map((name) => el("button", {
       type: "button", class: "link", text: `使用範例：${name}`,
-      onclick: async () => { try { setWorkbook(await post(`/api/samples/${encodeURIComponent(name)}`)); } catch (error) { showError(error); } },
+      onclick: async () => { try { guide()?.clearSavedWork(); setWorkbook(await post(`/api/samples/${encodeURIComponent(name)}`)); } catch (error) { showError(error); } },
     })));
   } catch (_error) { /* 沒有範例就不顯示 */ }
 }
 
 function updateRunButton() {
-  const isDemoRecipe = Boolean(state.recipeId && state.recipeId.startsWith("demo:"));
+  const isDemoRecipe = Boolean(state.recipeId && (state.recipeId.startsWith("demo:") || state.recipeId.startsWith("practice:")));
   const recipe = state.recipes.find((r) => r.id === state.recipeId);
   $("runButton").disabled = !((isDemoRecipe || (recipe && !recipe.problems.length)) && state.workbook);
 }
@@ -441,6 +450,8 @@ async function runNow() {
   try {
     state.selected = null;
     state.checked.clear();
+    const isDemo = Boolean((state.recipeId && (state.recipeId.startsWith("demo:") || state.recipeId.startsWith("practice:"))) || state.workbook?.demo);
+    if (!isDemo) guide()?.clearSavedWork();
     setResult(await post("/api/runs", { recipe: state.recipeId, workbook: state.workbook.id }), true);
   } catch (error) { showError(error, "無法執行"); }
 }
@@ -2013,7 +2024,7 @@ function bind() {
   $("runButton").addEventListener("click", runNow);
   $("exportButton").addEventListener("click", () => guide()?.notify("demo-export"));
   $("drawerClose").addEventListener("click", () => {
-    if (guide()?.isLabActive()) { guide().restoreWork(); return; }
+    if (guide()?.isLabActive()) { guide().leaveDemo({ dismiss: false }); return; }
     closePeek(); state.selected = null; renderTabs();
   });
   $("dialog").addEventListener("click", (e) => { if (e.target === $("dialog")) closeDialog(); });
