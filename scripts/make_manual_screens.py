@@ -27,7 +27,7 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
-        for name in ("RECIPES", "MAPPINGS", "REVIEWS", "UPLOADS", "SCRATCH", "OUTPUT"):
+        for name in ("RECIPES", "MAPPINGS", "REVIEWS", "UPLOADS", "SCRATCH"):
             setattr(server.paths, name, base / name.lower())
         server.paths.RECIPES.mkdir(parents=True, exist_ok=True)
         shutil.copy(EXAMPLES / "recipes" / "invoice-declaration.yaml", server.paths.RECIPES)

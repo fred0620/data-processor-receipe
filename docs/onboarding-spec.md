@@ -456,7 +456,7 @@ demo/
 | 人工決定 | `ReviewStore` 改用 `paths.SCRATCH / "demo" / "reviews"`，程式結束或 `/api/demo/clear` 時刪除 |
 | 補的對照 | `MappingStore` 改用 `paths.SCRATCH / "demo" / "mappings"`，同上 |
 | 執行結果 | 標 `demo: true`；介面 `#runStatus` 顯示「範例」小標籤 |
-| 匯出 | 檔名加「示範_」前綴（`workspace/output` 照樣留一份，維持手冊既有行為） |
+| 匯出 | 檔名加「示範_」前綴（0.2.2 起下載只在記憶體產生，不再另存到 `workspace/output`） |
 | 練習 recipe（關卡 B） | 存在暫存空間 `paths.SCRATCH / "demo" / "recipes" / "invoice.yaml"`，對外 id 為 `practice:invoice`，清單帶 `practice: true` 並顯示「練習」標籤。任何範例或練習程式都不碰 `workspace/recipes`。開始關卡 B、完成畫面的「刪除練習 recipe」與 `/api/demo/clear` 都只刪暫存檔 |
 | 練習（labs） | 不寫入 `workspace/recipes`；結果、決定、對照都在暫存 |
 

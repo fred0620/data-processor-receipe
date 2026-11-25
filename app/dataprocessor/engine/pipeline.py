@@ -7,6 +7,7 @@ Load → Gate → Normalize → Match → Transform → Validate → Mapping →
 """
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import fnmatch
 import logging
@@ -727,7 +728,7 @@ class _Run:
             if sorted(hits | set(fixed)) != sorted(memory.get(remembered, [])):
                 memory[remembered] = sorted(hits | set(fixed))
                 try:
-                    self.review.save()
+                    self.review.set_flagged(remembered, memory[remembered])
                 except OSError:   # 只是輔助紀錄，存不了不影響這次的結果，下次執行會再存
                     log.warning("驗證紀錄存檔失敗，略過")
             self.stage("validate", f"{check.message}：{len(rows)} 列", "review" if rows and check.level == "review" else None)
@@ -824,12 +825,7 @@ class _Run:
                 if issue.code == "required" and issue.stage == "mapping" and set(issue.out_columns) <= explained:
                     issue.level = "skip"
             record["issues"] = [i for i in record["issues"] if self.issues[i].level != "skip"]
-        for record in out_rows:
-            issues = [self.issues[i] for i in record["issues"]]
-            active = [i for i in issues if not i.dismissed]
-            handled = any(i.dismissed and i.level == "review" for i in issues) or bool(record["edited"])
-            record["status"] = ("review" if any(i.level == "review" for i in active)
-                                else "notice" if active else "confirmed" if handled else "ok")
+        self._row_statuses(out_rows)
         self.output = {"sheet": spec.sheet, "columns": [
             {"name": c.name, "type": c.type, "map": c.map, "required": c.required, "editable": c.editable}
             for c in spec.columns], "rows": out_rows}
@@ -840,7 +836,37 @@ class _Run:
         edited = sum(len(r["edited"]) for r in out_rows)
         if edited:
             self.stage("mapping", f"人工修改 {edited} 格")
+        self._stages_before_review = copy.deepcopy(self.stages)   # 只改「確認」時，從這裡重算卡片
         self._finalize_stages(out_rows)
+
+    def _row_statuses(self, out_rows: list[dict]) -> None:
+        for record in out_rows:
+            issues = [self.issues[i] for i in record["issues"]]
+            active = [i for i in issues if not i.dismissed]
+            handled = any(i.dismissed and i.level == "review" for i in issues) or bool(record["edited"])
+            record["status"] = ("review" if any(i.level == "review" for i in active)
+                                else "notice" if active else "confirmed" if handled else "ok")
+
+    def refresh_dismissed(self) -> bool:
+        """只有「確認無誤／取消確認」改變時，不必重跑讀取、配對和 SQL：資料完全一樣，
+        只要重新套上確認、重算每一列的狀態與流程卡片。結果和整個重跑相同（有測試比對）。
+        沒有完整跑完的結果（例如 recipe 出錯）回傳 False，交給呼叫端整個重跑。"""
+        if self.blocked or not self.output or not hasattr(self, "_stages_before_review"):
+            return False
+        dismissed = set(self.review.data["dismissed"])
+        for match in self.matches:
+            for row in match["rows"]:
+                if row["status"] in ("review", "confirmed"):   # confirmed 只會由 review 經人工確認而來
+                    confirmed = f"match_review|{match['left']}|{row['left']}|" in dismissed
+                    row["status"] = "confirmed" if confirmed else "review"
+            for name in ("review", "confirmed"):
+                match["counts"][name] = sum(1 for row in match["rows"] if row["status"] == name)
+        for issue in self.issues:
+            issue.dismissed = issue.resolved is not None or issue.key in dismissed
+        self.stages = copy.deepcopy(self._stages_before_review)
+        self._row_statuses(self.output["rows"])
+        self._finalize_stages(self.output["rows"])
+        return True
 
     def _output_value(self, column, value, record: dict, rid: str, issues: list[Issue]):
         def flag(level: str, code: str, message: str) -> None:

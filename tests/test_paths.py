@@ -7,7 +7,6 @@ def _point_to(monkeypatch, home):
     workspace = home / "workspace"
     monkeypatch.setattr(paths, "HOME", home)
     monkeypatch.setattr(paths, "WORKSPACE", workspace)
-    monkeypatch.setattr(paths, "OUTPUT", workspace / "output")
     monkeypatch.setattr(paths, "LOGS", workspace / "logs")
 
 
@@ -15,7 +14,7 @@ def test_first_run_seeds_examples_once(tmp_path, monkeypatch):
     _point_to(monkeypatch, tmp_path)
     paths.prepare()
     assert (paths.WORKSPACE / "README.txt").exists()
-    assert paths.OUTPUT.is_dir() and paths.LOGS.is_dir()
+    assert paths.LOGS.is_dir()
     (paths.WORKSPACE / "README.txt").unlink()
     paths.prepare()  # 使用者刪掉的起始資料不會再出現
     assert not (paths.WORKSPACE / "README.txt").exists()
